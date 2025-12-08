@@ -40,7 +40,11 @@ def select_next_view_active(
         angle = math.degrees(math.acos(max(min(align, 1.0), -1.0)))
         if angle < cfg.min_angle_deg:
             continue
-        score = align ** cfg.alignment_pow
+        # Use only non-negative alignment for scoring so that raising to a
+        # fractional power never produces complex values when the target lies
+        # behind the camera.
+        align_for_score = max(align, 0.0)
+        score = align_for_score ** cfg.alignment_pow
         scores.append((score, i))
     if not scores:
         # fallback to any unvisited view
