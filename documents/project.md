@@ -3,7 +3,7 @@
 
 **Course Level:** Level-3 (Novel Design & Extensive Experiments)
 **Type:** Pipeline Integration / Novel Application of Generative Models
-**Core Innovation:** Turning the "hallucination" weakness of generative AI into a "uncertainty" sensor signal for active robotic control.
+**Core Innovation:** Turning the "hallucination" weakness of generative AI into a "uncertainty" sensor signal for active view selection and (simulated) robotic control.
 
 ---
 
@@ -11,7 +11,7 @@
 
 Robotic manipulation in unstructured environments remains a challenge, particularly when critical affordance regions (e.g., the handle of a mug or the trigger of a drill) are occluded from the robot's initial viewpoint. Current state-of-the-art methods, such as *Grasp-Anything-6D* or *CoPa*, typically rely on single-shot reconstruction from depth sensors or exhaustive scanning policies, which fail when the object's geometry is ambiguous or when depth sensors are unavailable.
 
-We propose **Active-Hallucination**, a novel pipeline that utilizes the stochastic nature of text-to-3D generative models (Point-E) as a signal for active perception. We observe that when generative models attempt to reconstruct occluded geometry, they exhibit high variance across different random seeds (hallucination), whereas visible geometry remains consistent. By generating multiple 3D hypotheses from a single RGB view and computing a **Semantic Variance Field**, our system identifies specific regions of high uncertainty regarding the target affordance. We introduce a lightweight Next-Best-View (NBV) heuristic that directs the robot’s camera toward the "center of hallucination." Unlike traditional NBV algorithms that optimize for geometric coverage, our method optimizes for **semantic confidence**, allowing a robot to proactively investigate and grasp objects based on generative priors rather than blind exploration.
+We propose **Active-Hallucination**, a novel pipeline that utilizes the stochastic nature of text-to-3D generative models (Point-E) as a signal for active perception. We observe that when generative models attempt to reconstruct occluded geometry, they exhibit high variance across different random seeds (hallucination), whereas visible geometry remains consistent. By generating multiple 3D hypotheses from a single RGB view and computing a **Semantic Variance Field**, our system identifies specific regions of high uncertainty regarding the target affordance. We introduce a lightweight Next-Best-View (NBV) heuristic that directs a virtual camera in simulation toward the "center of hallucination." Unlike traditional NBV algorithms that optimize for geometric coverage, our method optimizes for **semantic confidence**, allowing an agent to proactively investigate and "grasp" objects in a simulated environment based on generative priors rather than blind exploration. We evaluate this pipeline purely in simulation on tabletop objects, comparing against random and geometric NBV baselines using variance reduction and handle-localization metrics.
 
 ---
 
@@ -40,7 +40,7 @@ Traditional Next-Best-View (NBV) algorithms operate on **Geometric Entropy**. Th
 
 ## 3. Methodology: The Technical Pipeline
 
-This project is **Inference-Only** (no training required), minimizing "Implementation Hell."
+This project is **Inference-Only** (no training required), minimizing "Implementation Hell," and is evaluated **purely in simulation** (no physical robot or sensor hardware required).
 
 ### Module A: Stochastic 3D Generation (The "Scatter")
 **Input:** A single RGB crop of the object $I_{rgb}$ and a text prompt (e.g., "A blue ceramic pitcher").
@@ -66,11 +66,11 @@ High variance isn't enough—the model might hallucinate the floor or background
 3.  **Targeted Uncertainty:** We filter the Variance Field to only consider voxels that are semantically relevant (or neighbors of relevant voxels).
     $$ \text{Score}(v) = \sigma^2(v) \times \text{SemanticWeight}(v) $$
 
-### Module D: Active View Selection (The Control)
+### Module D: Active View Selection (The Control, in Simulation)
 1.  **Centroid Extraction:** We calculate the 3D centroid $C_{target}$ of the highest-scoring voxels (the "Center of Hallucination").
 2.  **Vector Calculation:** We compute a vector from the current camera position to $C_{target}$.
-3.  **Action:** The robot moves the camera along an orbital path by $\theta$ degrees (e.g., $30^{\circ}$) to align its optical axis with $C_{target}$.
-4.  **Loop:** Take a new picture. If variance drops below a threshold $\tau$, perform the grasp. If not, repeat.
+3.  **Action:** A virtual camera in a simulated tabletop scene moves along an orbital path by $\theta$ degrees (e.g., $30^{\circ}$) to align its optical axis with $C_{target}$.
+4.  **Loop:** Render a new view. If variance drops below a threshold $\tau$, we mark the handle as sufficiently observed and trigger a (simulated) grasp success; otherwise, we repeat.
 
 ---
 
@@ -97,9 +97,9 @@ High variance isn't enough—the model might hallucinate the floor or background
     3.  Compute the centroid of the remaining "red" points.
     4.  Output a text command: "Recommended Action: Move Camera [Left/Right/Up] by X degrees."
 
-### Week 4: Experiments & Report
-*   **Goal:** Run the "Simulation" on a static dataset.
-*   **Task:** Take photos of 5 household objects from "bad" angles. Run the pipeline. Record the output commands. Verify if following the command reveals the hidden part.
+### Week 4: Simulation Experiments & Report
+*   **Goal:** Run Active-Hallucination in a controlled simulated tabletop setup.
+*   **Task:** Select 5–10 mesh models of household objects (e.g., mugs, pitchers, drills). For each object, define a discrete set of viewpoints on an orbital camera ring, render "bad" initial views plus follow-up views according to our NBV policy and baselines (Random, Geometric NBV). Run the full pipeline, record camera steps, variance trajectories, and handle-localization success, and prepare figures for the report and presentation.
 
 ---
 
