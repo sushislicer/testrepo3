@@ -1,0 +1,35 @@
+simulator:
+  mesh_path: assets/meshes/example.obj
+  radius: 1.2
+  elevation_deg: 30.0
+  num_views: 24
+  intrinsics:
+    width: 512
+    height: 512
+    fx: 575.0
+    fy: 575.0
+    cx: 256.0
+    cy: 256.0
+pointe:
+  device: cuda
+  num_points: 4096
+  num_seeds: 5
+  guidance_scale: 3.0
+  prompt: "a photo of a mug"
+variance:
+  grid_bounds: 0.5
+  resolution: 96
+  topk_ratio: 0.05
+segmentation:
+  prompt: "handle"
+  model_name: CIDAS/clipseg-rd64-refined
+  threshold: 0.25
+policy:
+  alignment_pow: 1.5
+  min_angle_deg: 5.0
+experiment:
+  num_steps: 3
+  save_debug: true
+  output_dir: outputs/logs
+  trajectory_name: demo
+  policy: active
