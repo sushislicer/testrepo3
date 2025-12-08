@@ -72,14 +72,17 @@ High variance isn't enough—the model might hallucinate the floor or background
 3.  **Action:** A virtual camera in a simulated tabletop scene moves along an orbital path by $\theta$ degrees (e.g., $30^{\circ}$) to align its optical axis with $C_{target}$.
 4.  **Loop:** Render a new view. If variance drops below a threshold $\tau$, we mark the handle as sufficiently observed and trigger a (simulated) grasp success; otherwise, we repeat.
 
+### Simulation Platform: Python Virtual Camera
+We implement the simulated tabletop environment and camera entirely in Python using lightweight 3D libraries (e.g., **trimesh** + **pyrender**, optionally **Open3D** for debugging). These tools allow us to: (1) load mesh models of objects, (2) place them on a virtual table, (3) define camera intrinsics and extrinsics, and (4) render RGB images offscreen from arbitrary viewpoints. Our NBV module outputs target camera poses on a discrete orbital ring; the Python renderer then produces the corresponding "robot view" image that is fed back into Point-E and CLIPSeg. No external robotics simulator or GUI is required—everything runs as a pure Python codebase.
+
 ---
 
 ## 4. Implementation Plan (4 Weeks)
 
 ### Week 1: The "Scatter" (Generation Scripting)
 *   **Goal:** Generate 5 aligned point clouds from 1 image.
-*   **Tools:** Python, PyTorch, Point-E (HuggingFace).
-*   **Task:** Write a script that loops the model 5 times. Use Open3D to visualize them superimposed. You should see the "fuzzy ghost" effect on hidden parts.
+*   **Tools:** Python, PyTorch, Point-E (HuggingFace), trimesh, pyrender, Open3D.
+*   **Task:** Write a script that loops the model 5 times. Use Open3D (or pyrender) to visualize them superimposed. You should see the "fuzzy ghost" effect on hidden parts.
 
 ### Week 2: The "Gather" (Metric Implementation)
 *   **Goal:** Calculate the Variance Cloud.
@@ -99,7 +102,7 @@ High variance isn't enough—the model might hallucinate the floor or background
 
 ### Week 4: Simulation Experiments & Report
 *   **Goal:** Run Active-Hallucination in a controlled simulated tabletop setup.
-*   **Task:** Select 5–10 mesh models of household objects (e.g., mugs, pitchers, drills). For each object, define a discrete set of viewpoints on an orbital camera ring, render "bad" initial views plus follow-up views according to our NBV policy and baselines (Random, Geometric NBV). Run the full pipeline, record camera steps, variance trajectories, and handle-localization success, and prepare figures for the report and presentation.
+*   **Task:** Select 5–10 mesh models of household objects (e.g., mugs, pitchers, drills). For each object, define a discrete set of viewpoints on an orbital camera ring in the Python simulator, render "bad" initial views plus follow-up views according to our NBV policy and baselines (Random, Geometric NBV) using the pyrender-based virtual camera. Run the full pipeline, record camera steps, variance trajectories, and handle-localization success, and prepare figures for the report and presentation.
 
 ---
 
