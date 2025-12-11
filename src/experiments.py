@@ -38,6 +38,8 @@ class StepLog:
     variance_sum: float
     policy_score: float
     centroid: List[float]
+    distance_to_gt: Optional[float] = None
+    success: Optional[bool] = None
 
 
 def _ensure_dir(path: Path) -> None:
@@ -77,6 +79,11 @@ class ActiveHallucinationRunner:
         visited.add(current)
 
         grid = VoxelGrid(bounds=cfg.variance.grid_bounds, resolution=cfg.variance.resolution)
+        gt = (
+            np.array(cfg.experiment.gt_handle_centroid, dtype=np.float32)
+            if cfg.experiment.gt_handle_centroid is not None
+            else None
+        )
 
         for step in range(cfg.experiment.num_steps):
             rgb, _ = self.sim.render_view(current)
@@ -96,6 +103,12 @@ class ActiveHallucinationRunner:
             score_grid = combine_variance_and_semantics(variance_grid, semantic_grid)
             centroid, _ = extract_topk_centroid(score_grid, grid, cfg.variance.topk_ratio)
 
+            distance_to_gt = None
+            success_flag = None
+            if gt is not None:
+                distance_to_gt = float(np.linalg.norm(centroid - gt))
+                success_flag = distance_to_gt <= cfg.experiment.success_threshold
+
             if cfg.experiment.policy == "active":
                 next_view, policy_score = select_next_view_active(current, poses, centroid, visited, cfg.policy)
             elif cfg.experiment.policy == "random":
@@ -114,6 +127,8 @@ class ActiveHallucinationRunner:
                     variance_sum=variance_sum,
                     policy_score=policy_score,
                     centroid=centroid.tolist(),
+                    distance_to_gt=distance_to_gt,
+                    success=success_flag,
                 )
             )
 
@@ -121,11 +136,23 @@ class ActiveHallucinationRunner:
             visited.add(next_view)
             current = next_view
 
+        variance_sums = [log.variance_sum for log in logs]
+        vrr = self._compute_vrr(variance_sums)
+        success_at_k = logs[-1].success if logs else None
+        dist_at_k = logs[-1].distance_to_gt if logs else None
+
         result = {
             "config": cfg.to_dict(),
             "steps": [asdict(l) for l in logs],
+            "metrics": {
+                "variance_sum": variance_sums,
+                "variance_reduction_rate": vrr,
+                "success_at_final_step": success_at_k,
+                "distance_to_gt_at_final_step": dist_at_k,
+            },
         }
         self._save_logs(result)
+        self._save_csv(logs, vrr)
         return result
 
     def _save_logs(self, data: Dict) -> None:
@@ -133,3 +160,53 @@ class ActiveHallucinationRunner:
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
         logger.info("Saved trajectory log to %s", path)
+
+    @staticmethod
+    def _compute_vrr(variance_sums: List[float]) -> List[float]:
+        """Variance Reduction Rate per step, normalized to step 0."""
+        if not variance_sums:
+            return []
+        baseline = variance_sums[0]
+        denom = baseline if baseline > 1e-8 else 1e-8
+        return [(baseline - v) / denom for v in variance_sums]
+
+    def _save_csv(self, logs: List[StepLog], vrr: List[float]) -> None:
+        """Save per-step metrics as CSV for quick analysis."""
+        path = self._output_root / "trajectory_metrics.csv"
+        import csv
+
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(
+                [
+                    "step",
+                    "view_id",
+                    "next_view_id",
+                    "variance_sum",
+                    "variance_reduction_rate",
+                    "policy_score",
+                    "centroid_x",
+                    "centroid_y",
+                    "centroid_z",
+                    "distance_to_gt",
+                    "success",
+                ]
+            )
+            for log, vrr_val in zip(logs, vrr):
+                cx, cy, cz = log.centroid
+                writer.writerow(
+                    [
+                        log.step,
+                        log.view_id,
+                        log.next_view_id,
+                        log.variance_sum,
+                        vrr_val,
+                        log.policy_score,
+                        cx,
+                        cy,
+                        cz,
+                        log.distance_to_gt if log.distance_to_gt is not None else "",
+                        log.success if log.success is not None else "",
+                    ]
+                )
+        logger.info("Saved trajectory metrics CSV to %s", path)

@@ -70,6 +70,8 @@ class ExperimentConfig:
     output_dir: str = "outputs/logs"
     trajectory_name: str = "demo"
     policy: str = "active"  # active | random | geometric
+    gt_handle_centroid: Optional[List[float]] = None  # [x, y, z] in world coords (meters)
+    success_threshold: float = 0.02  # meters; distance for success @ step K
 
 
 @dataclass
