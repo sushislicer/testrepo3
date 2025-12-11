@@ -7,6 +7,8 @@ matplotlib>=3.8.0
 tqdm>=4.66.0
 trimesh>=4.2.0
 pyrender>=0.1.45
+# pyrender 0.1.x expects pyglet 1.x; pin <2 to avoid GL loader breakage
+pyglet<2.0
 open3d>=0.17.0
 opencv-python>=4.8.0.76
 transformers>=4.36.0

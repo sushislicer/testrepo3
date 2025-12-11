@@ -6,8 +6,8 @@ import argparse
 from pathlib import Path
 import imageio
 
-from active_hallucination.config import ActiveHallucinationConfig
-from active_hallucination.simulator import VirtualTabletopSimulator
+from src.config import ActiveHallucinationConfig
+from src.simulator import VirtualTabletopSimulator
 
 
 def parse_args() -> argparse.Namespace:

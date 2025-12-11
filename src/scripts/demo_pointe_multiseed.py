@@ -7,9 +7,9 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from active_hallucination.config import ActiveHallucinationConfig
-from active_hallucination.pointe_wrapper import PointEGenerator
-from active_hallucination.visualization import overlay_point_clouds_open3d
+from src.config import ActiveHallucinationConfig
+from src.pointe_wrapper import PointEGenerator
+from src.visualization import overlay_point_clouds_open3d
 
 
 def parse_args() -> argparse.Namespace:

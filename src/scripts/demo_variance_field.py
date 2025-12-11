@@ -7,10 +7,10 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from active_hallucination.config import ActiveHallucinationConfig
-from active_hallucination.pointe_wrapper import PointEGenerator
-from active_hallucination.segmentation import CLIPSegSegmenter
-from active_hallucination.variance_field import (
+from src.config import ActiveHallucinationConfig
+from src.pointe_wrapper import PointEGenerator
+from src.segmentation import CLIPSegSegmenter
+from src.variance_field import (
     VoxelGrid,
     compute_variance_field,
     accumulate_semantic_weights,

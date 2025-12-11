@@ -5,8 +5,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from active_hallucination.config import ActiveHallucinationConfig
-from active_hallucination.experiments import ActiveHallucinationRunner
+from src.config import ActiveHallucinationConfig
+from src.experiments import ActiveHallucinationRunner
 
 
 def parse_args() -> argparse.Namespace:
