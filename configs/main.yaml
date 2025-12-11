@@ -1,5 +1,6 @@
 simulator:
   mesh_path: assets/meshes/example.obj
+  background_color: [1.0, 1.0, 1.0]
   radius: 1.2
   elevation_deg: 30.0
   num_views: 24

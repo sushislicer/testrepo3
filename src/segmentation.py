@@ -6,6 +6,7 @@ import logging
 from dataclasses import dataclass
 from typing import Optional
 
+import cv2
 import numpy as np
 import torch
 
@@ -47,14 +48,49 @@ class CLIPSegSegmenter:
         inputs = self.processor(
             text=[prompt],
             images=[image],
-            padding=True,
             return_tensors="pt",
         ).to(self.device)
         with torch.no_grad():
             outputs = self.model(**inputs)
-            logits = outputs.logits  # [B, 1, H, W]
-            probs = torch.sigmoid(logits)[0, 0]
+            logits = outputs.logits  # expected [B, 1, H, W]
+            probs = torch.sigmoid(logits)
+            expected_hw = logits.shape[-2:] if logits.dim() >= 2 else None
+
+        # Reduce to a single 2D mask robustly across possible tensor shapes.
+        if probs.dim() == 4:           # [B,1,H,W] or [B,C,H,W]
+            probs = probs[0, 0]
+        elif probs.dim() == 3:         # [B,H,W] or [C,H,W]
+            probs = probs[0]
+        elif probs.dim() == 2:         # [H,W] already fine
+            pass
+        else:                          # anything else is unexpected
+            logger.warning("Segmentation mask logits have unexpected dims %s; returning zeros.", list(probs.shape))
+            return np.zeros((image.shape[0], image.shape[1]), dtype=np.float32)
+
         mask = probs.detach().cpu().numpy().astype(np.float32)
+
+        # Normalize mask shape to 2D and match the rendered image resolution.
+        mask = np.squeeze(mask)
+        if mask.ndim == 1 and expected_hw is not None:
+            h_exp, w_exp = int(expected_hw[0]), int(expected_hw[1])
+            if h_exp * w_exp == mask.size:
+                mask = mask.reshape(h_exp, w_exp)
+        if mask.ndim == 1:
+            # If still flat, try square reshape as last resort.
+            side = int(np.sqrt(mask.size))
+            if side * side == mask.size:
+                mask = mask.reshape(side, side)
+        if mask.ndim == 3:
+            mask = mask.mean(axis=-1)
+        if mask.ndim != 2:
+            logger.warning("Segmentation mask has unexpected shape %s; returning zeros.", mask.shape)
+            return np.zeros((image.shape[0], image.shape[1]), dtype=np.float32)
+        if mask.shape != image.shape[:2]:
+            try:
+                mask = cv2.resize(mask, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_LINEAR)
+            except Exception as exc:  # pragma: no cover - best effort resize
+                logger.warning("Failed to resize mask from %s to %s (%s). Using zeros.", mask.shape, image.shape[:2], exc)
+                mask = np.zeros((image.shape[0], image.shape[1]), dtype=np.float32)
         return mask
 
 
@@ -81,6 +117,13 @@ def compute_point_mask_weights(
     mask: np.ndarray,
 ) -> np.ndarray:
     """Lookup mask probability for each 3D point by projecting into the image."""
+    mask = np.asarray(mask)
+    if mask.ndim == 3:
+        mask = mask.mean(axis=-1)
+    if mask.ndim != 2:
+        logger.warning("Point mask weights received invalid mask shape %s; returning zeros.", mask.shape)
+        return np.zeros(points_world.shape[0], dtype=np.float32)
+
     pix = project_points_to_pixels(points_world, cam_to_world, intrinsics)
     u = pix[:, 0].round().astype(int)
     v = pix[:, 1].round().astype(int)
