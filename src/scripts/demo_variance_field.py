@@ -17,8 +17,8 @@ from src.variance_field import (
     combine_variance_and_semantics,
     export_score_points,
 )
-from active_hallucination.visualization import save_variance_max_projection
-from active_hallucination.simulator import pose_to_matrix
+from src.visualization import save_variance_max_projection
+from src.simulator import pose_to_matrix
 
 
 def parse_args() -> argparse.Namespace:
