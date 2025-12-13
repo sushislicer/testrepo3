@@ -81,25 +81,41 @@ class PointEGenerator:
             logger.warning("Pillow missing; returning synthetic cloud (%s)", exc)
             return self._synthetic_point_cloud(seed)
 
-        pil_image = Image.fromarray(image.astype(np.uint8))
+        pil_image = Image.fromarray(image.astype(np.uint8)).convert("RGB")
         pil_image = pil_image.resize((256, 256))
-        image_tensor = torch.tensor(np.array(pil_image)).float().to(self.device) / 255.0
-        image_tensor = image_tensor.permute(2, 0, 1).unsqueeze(0)  # 1x3xHxW
 
         samples = None
-        kwargs = dict(texts=[prompt])
-        # Try image conditioning if supported by the sampler
-        try:
-            kwargs["images"] = image_tensor
-        except Exception:
-            pass
+        kwargs = dict(texts=[prompt], images=[pil_image])
 
-        for sample in self.sampler.sample_batch_progressive(batch_size=1, model_kwargs=kwargs):
-            samples = sample
+        try:
+            for sample in self.sampler.sample_batch_progressive(batch_size=1, model_kwargs=kwargs):
+                samples = sample
+        except Exception as exc:
+            # If image conditioning fails (shape/dtype issues), fall back to text-only
+            logger.warning("Point-E image conditioning failed (%s); retrying without images.", exc)
+            kwargs = dict(texts=[prompt])
+            for sample in self.sampler.sample_batch_progressive(batch_size=1, model_kwargs=kwargs):
+                samples = sample
+
+        if samples is None:
+            logger.warning("Point-E sampling returned no samples; using synthetic cloud.")
+            return self._synthetic_point_cloud(seed)
 
         pcs = self.sampler.output_to_point_clouds(samples)
-        pts = pcs[0].coords.detach().cpu().numpy()
-        return pts
+        pc0 = pcs[0]
+
+        # Support both Point-E PointCloud objects and raw numpy / torch tensors.
+        if hasattr(pc0, "coords"):
+            pts = pc0.coords
+        else:
+            pts = pc0
+
+        if hasattr(pts, "detach"):
+            pts = pts.detach().cpu().numpy()
+        else:
+            pts = np.asarray(pts)
+
+        return pts.astype(np.float32)
 
     def _synthetic_point_cloud(self, seed: int) -> np.ndarray:
         """Generate a structured synthetic cloud (filled cylinder) for debugging."""
