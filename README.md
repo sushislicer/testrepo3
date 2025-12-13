@@ -12,14 +12,14 @@ pip install -r requirements.txt
 ```
 2) Ensure GPU-enabled PyTorch if available (`python - <<'PY'\nimport torch; print(torch.cuda.is_available())\nPY`).
 3) Place meshes under `assets/meshes/` (OBJ/PLY/GLB/STL). The code assumes objects are centered near the origin with the base on `z=0`.
-4) Run a dry demo (no heavy compute) to verify imports:
+4) Run a dry demo (no heavy compute) to verify rendering + imports:
 ```
-python -m active_hallucination.scripts.demo_orbital_camera --mesh assets/meshes/example.obj
+python -m src.scripts.demo_orbital_camera --mesh assets/meshes/example.obj
 ```
 
 ## Layout
 
-- `src/active_hallucination/`: core library
+- `src/`: core library (importable as the `src` package in this repo)
   - `config.py`: dataclasses + YAML helpers.
   - `simulator.py`: pyrender-based tabletop camera + renderer.
   - `pointe_wrapper.py`: Point-E multi-seed generation helper with graceful fallbacks.
@@ -28,10 +28,46 @@ python -m active_hallucination.scripts.demo_orbital_camera --mesh assets/meshes/
   - `nbv_policy.py`: Active-Hallucination NBV + baselines.
   - `experiments.py`: end-to-end loops, metrics, logging.
   - `visualization.py`: overlays, variance heatmaps, trajectory grids.
-- `scripts/`: CLI entrypoints for demos and experiments.
-- `assets/meshes/`: place your mesh models here (see `plan.md` for categories).
+- `src/scripts/`: CLI entrypoints for demos and experiments.
+- `assets/meshes/`: place your mesh models here (see `documents/plan.md` for categories).
 - `outputs/`: renders, logs, and figures.
 - `configs/`: YAML configs for experiments.
+
+## Scripts (CLI entrypoints)
+
+All entrypoints live under `src/scripts/` and can be run via `python -m src.scripts.<name> ...`.
+
+- `demo_orbital_camera`: sanity-check the simulator by rendering an orbital ring of RGB views for a single mesh.
+  - Inputs: `--mesh <path>`, optional `--num_views <N>`, `--output <dir>`
+  - Outputs: `view_00.png`, `view_01.png`, ... under `--output` (default `outputs/demo_orbit`)
+  - How it works: constructs a default `ActiveHallucinationConfig`, overrides `cfg.simulator.mesh_path`, initializes `VirtualTabletopSimulator`, then calls `sim.render_view(i)` for `i=0..num_views-1` and writes each RGB frame via `imageio`.
+  - Example: `python -m src.scripts.demo_orbital_camera --mesh assets/meshes/example.obj --num_views 24`
+
+- `demo_pointe_multiseed`: sample multiple Point-E reconstructions (different random seeds) from a single RGB image.
+  - Inputs: `--image <path>`, optional `--prompt <text>`, `--num_seeds <N>`, `--save_dir <dir>`, `--view`
+  - Outputs: `cloud_00.npy`, `cloud_01.npy`, ... under `--save_dir` (default `outputs/demo_pointe`)
+  - Notes: `--view` attempts an Open3D overlay visualization (if Open3D is installed and working).
+  - How it works: loads the image with PIL, calls `PointEGenerator.generate_point_clouds_from_image(...)` to produce multiple point clouds (one per seed), saves them as `.npy`, and optionally visualizes them with `overlay_point_clouds_open3d`.
+  - Example: `python -m src.scripts.demo_pointe_multiseed --image path/to/image.png --num_seeds 8 --view`
+
+- `demo_variance_field`: compute a voxelized variance field from Point-E multi-seed outputs, optionally weighted by a CLIPSeg affordance mask.
+  - Inputs: `--image <path>`, optional `--prompt <text>`, `--use_mask`, `--save_dir <dir>`
+  - Outputs: `variance_projection.png` (max-projection) and `variance_points.npy` (thresholded 3D score points) under `--save_dir` (default `outputs/demo_variance`)
+  - Notes: `--use_mask` runs CLIPSeg and uses the mask to reweight points before combining with variance.
+  - How it works: (1) generates multi-seed Point-E point clouds from the input image, (2) voxelizes them into a grid and computes per-voxel variance (`compute_variance_field`), (3) optionally runs CLIPSeg to get a 2D affordance mask and accumulates per-voxel semantic weights (`accumulate_semantic_weights`), then (4) combines variance+semantics (`combine_variance_and_semantics`) and exports a 2D max-projection plus thresholded 3D score points.
+  - Example: `python -m src.scripts.demo_variance_field --image path/to/image.png --use_mask`
+
+- `run_single_object_demo`: run one complete Active-Hallucination “episode” (NBV loop) for a single mesh and log results.
+  - Inputs: `--mesh <path>`, optional `--config <yaml>`, `--policy active|random|geometric`, `--steps <N>`, `--initial_view <idx>`, `--output <dir>`
+  - Outputs: per-step renders/figures/logs under `cfg.experiment.output_dir/cfg.experiment.trajectory_name` (defaults are set in `src/config.py`)
+  - How it works: loads a base config (optionally from YAML), applies CLI overrides, then runs `ActiveHallucinationRunner.run_episode(...)` which iterates for `num_steps`: render a view, run Point-E multi-seed generation, compute the variance(+mask) score volume, select the next view using the chosen policy, and log artifacts to the trajectory folder.
+  - Example: `python -m src.scripts.run_single_object_demo --mesh assets/meshes/example.obj --policy active --steps 8`
+
+- `run_experiments`: batch runner over many meshes and policies (useful for quick comparisons).
+  - Inputs: optional `--config <yaml>`, `--mesh_glob <glob>`, `--policies <comma,list>`, `--trials <N>`
+  - Outputs: one trajectory folder per `(mesh, policy, trial)` under the configured output directory
+  - How it works: expands `--mesh_glob`, loops over meshes × policies × trials, clones the base config each time, sets `trajectory_name` (and offsets `random_seed` by trial), then calls `ActiveHallucinationRunner.run_episode()` for each run.
+  - Example: `python -m src.scripts.run_experiments --mesh_glob 'assets/meshes/*.obj' --policies active,random --trials 3`
 
 ## Notes
 
