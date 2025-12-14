@@ -7,9 +7,13 @@ import argparse
 from pathlib import Path
 
 CURRENT_SCRIPT_PATH = Path(__file__).resolve()
-CURRENT_SCRIPT_DIR = CURRENT_SCRIPT_PATH.parent  # root/src/scripts
+CURRENT_SCRIPT_DIR = CURRENT_SCRIPT_PATH.parent
 PROJECT_ROOT = CURRENT_SCRIPT_DIR.parent.parent
 DEFAULT_ASSETS_DIR = PROJECT_ROOT / "assets" / "meshes"
+
+# Disturbing monkey patch cause compatibility
+if not hasattr(np, 'infty'):
+    np.infty = np.inf
 
 def get_file_list(search_path: Path) -> list[Path]:
     valid_extensions = {'.obj', '.ply', '.stl', '.glb', '.gltf', '.off', '.dae'}
