@@ -133,3 +133,38 @@ def compute_point_mask_weights(
     weights = np.zeros(points_world.shape[0], dtype=np.float32)
     weights[valid] = mask[v[valid], u[valid]]
     return weights
+
+
+def compute_combined_score(
+    variance_grid: np.ndarray, 
+    semantic_weights: np.ndarray
+) -> np.ndarray:
+    """
+    Compute the final voxel score by combining variance and semantic weights.
+
+    Implements Requirement 6.3 (Combined semantic variance score).
+    
+    Formula: Score(v) = Variance(v) * SemanticWeight(v)
+    Result is normalized to [0, 1].
+
+    Args:
+        variance_grid: (N,) float array of geometric variance/uncertainty.
+        semantic_weights: (N,) float array of semantic relevance (from CLIPSeg).
+
+    Returns:
+        normalized_scores: (N,) float array in range [0, 1].
+    """
+    # 1. Compute raw score
+    raw_scores = variance_grid * semantic_weights
+    
+    # 2. Normalize scores to [0, 1]
+    min_val = np.min(raw_scores)
+    max_val = np.max(raw_scores)
+    
+    if max_val - min_val < 1e-6:
+        # Avoid division by zero if all scores are identical
+        return np.zeros_like(raw_scores)
+        
+    normalized_scores = (raw_scores - min_val) / (max_val - min_val)
+    
+    return normalized_scores
