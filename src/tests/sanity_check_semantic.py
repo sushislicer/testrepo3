@@ -1,6 +1,8 @@
 """
 Sanity Check: Semantic Variance Field Integration.
 
+Location: src/tests/sanity_check_semantic.py
+
 This script verifies the full pipeline:
 1. Image -> Point-E (3D Clouds)
 2. Image -> CLIPSeg (2D Mask)
@@ -8,7 +10,7 @@ This script verifies the full pipeline:
 4. Semantic Grid * Variance Grid -> Final Score Field
 
 Usage:
-    python src/scripts/sanity_check_semantic.py --image assets/images/mug.png --prompt "handle"
+    python src/tests/sanity_check_semantic.py --image assets/images/mug.png --prompt "handle"
 """
 
 from __future__ import annotations
@@ -38,6 +40,7 @@ from src.variance_field import (
     VoxelGrid
 )
 
+
 @dataclass
 class SimpleIntrinsics:
     fx: float
@@ -45,34 +48,48 @@ class SimpleIntrinsics:
     cx: float
     cy: float
 
+
 def get_virtual_camera(image_size: int = 512):
     """
     Creates a virtual camera positioned to view the Point-E object from the front.
     Point-E usually generates objects centered at (0,0,0) within a unit cube.
     """
-    # FOV ~60 degrees is standard. fx = width / (2 * tan(fov/2))
     focal = image_size  # Approx 53 degrees FOV
     intrinsics = SimpleIntrinsics(
         fx=focal, fy=focal, cx=image_size / 2, cy=image_size / 2
     )
-
     # Place camera at (0, 0, 2.0) looking at (0, 0, 0)
-    # Assuming Pyrender/OpenGL convention where camera looks down -Z
     cam_to_world = np.eye(4, dtype=np.float32)
     cam_to_world[:3, 3] = [0.0, 0.0, 2.0]
-    
     return cam_to_world, intrinsics
+
+
+def resolve_image_path(path_str: str) -> Path:
+    path = Path(path_str)
+    if path.exists():
+        return path
+    asset_path = PROJECT_ROOT / "assets" / "images" / path_str
+    if asset_path.exists():
+        return asset_path
+    root_path = PROJECT_ROOT / path_str
+    if root_path.exists():
+        return root_path
+    raise FileNotFoundError(f"Image not found: {path_str}")
+
 
 def main():
     parser = argparse.ArgumentParser(description="Test Semantic Variance Field.")
     parser.add_argument("--image", type=str, required=True, help="Path to input image.")
     parser.add_argument("--prompt", type=str, default="handle", help="Text prompt for CLIPSeg.")
-    parser.add_argument("--seeds", type=int, default=5, help="Number of Point-E clouds to generate.")
+    parser.add_argument("--seeds", type=int, default=5, help="Number of Point-E clouds.")
     args = parser.parse_args()
 
-    img_path = Path(args.image)
-    if not img_path.exists():
-        img_path = PROJECT_ROOT / args.image
+    try:
+        img_path = resolve_image_path(args.image)
+    except FileNotFoundError as e:
+        print(e)
+        return
+
     print(f"--- Semantic Variance Sanity Check ---")
     print(f"Target: '{args.prompt}' in {img_path.name}")
     pil_img = Image.open(img_path).convert("RGB").resize((512, 512))
@@ -87,10 +104,11 @@ def main():
     print(f"2. Computing 2D Affordance Mask...")
     seg = CLIPSegSegmenter(cfg.segmentation)
     mask = seg.segment_affordance(img_arr, prompt=args.prompt)
+    
     mask_debug_path = PROJECT_ROOT / "outputs" / "debug_mask.png"
+    mask_debug_path.parent.mkdir(parents=True, exist_ok=True)
     Image.fromarray((mask * 255).astype(np.uint8)).save(mask_debug_path)
     print(f"   -> Mask saved to {mask_debug_path}")
-
 
     print(f"3. Projecting 2D mask to 3D points...")
     cam_to_world, intrinsics = get_virtual_camera(image_size=512)
@@ -110,7 +128,7 @@ def main():
     print(f"Max Combined: {score_grid.max():.4f}")
     
     if score_grid.max() == 0:
-        print("[WARNING] Combined score is zero. Check if projection aligned points with the mask.")
+        print("[WARNING] Combined score is zero. Check projection alignment.")
     else:
         print("[SUCCESS] High-scoring regions identified.")
 
@@ -142,6 +160,7 @@ def main():
         out_path = PROJECT_ROOT / "outputs" / "semantic_check.ply"
         o3d.io.write_point_cloud(str(out_path), pcd)
         print(f"Headless environment detected. Saved PLY to {out_path}")
+
 
 if __name__ == "__main__":
     main()

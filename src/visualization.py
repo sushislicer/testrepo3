@@ -1,27 +1,165 @@
-"""Lightweight visualization utilities for figures and debugging."""
+"""Lightweight visualization utilities."""
 
 from __future__ import annotations
 
 import colorsys
 from pathlib import Path
-from typing import List
+from typing import List, Dict, Optional
 
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
 
 try:
     import open3d as o3d
-except Exception:  # pragma: no cover - optional dependency
+except ImportError:
     o3d = None
 
 
-def overlay_point_clouds_open3d(point_clouds: List[np.ndarray]) -> None:
-    """Quick visual overlay using open3d (interactive)."""
+def render_point_cloud_overlay(
+    point_clouds: List[np.ndarray],
+    save_path: Optional[str] = None,
+    view_point: Optional[dict] = None
+) -> np.ndarray:
     if o3d is None:
-        raise ImportError("open3d is required for visualization.")
+        return np.zeros((512, 512, 3), dtype=np.uint8)
+
+    vis = o3d.visualization.Visualizer()
+    try:
+        vis.create_window(visible=False, width=800, height=800)
+    except Exception:
+        vis.create_window(visible=True, width=800, height=800)
+
+    for idx, pc in enumerate(point_clouds):
+        if len(pc) == 0: continue
+        hue = idx / max(len(point_clouds), 1)
+        color = np.array(colorsys.hsv_to_rgb(hue, 0.8, 1.0))
+        
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(pc)
+        pcd.colors = o3d.utility.Vector3dVector(np.tile(color, (pc.shape[0], 1)))
+        vis.add_geometry(pcd)
+
+    ctr = vis.get_view_control()
+    if not view_point:
+        ctr.rotate(10.0, 0.0)
+
+    vis.poll_events()
+    vis.update_renderer()
+    image = vis.capture_screen_float_buffer(do_render=True)
+    image_np = (np.asarray(image) * 255).astype(np.uint8)
+    vis.destroy_window()
+
+    if save_path:
+        Path(save_path).parent.mkdir(parents=True, exist_ok=True)
+        plt.imsave(save_path, image_np)
+        
+    return image_np
+
+
+def create_ghosting_figure(
+    input_rgb: np.ndarray,
+    point_clouds: List[np.ndarray],
+    variance_grid: np.ndarray,
+    save_path: str
+) -> None:
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    
+    axes[0].imshow(input_rgb)
+    axes[0].set_title("Input")
+    axes[0].axis("off")
+
+    pc_render = render_point_cloud_overlay(point_clouds)
+    axes[1].imshow(pc_render)
+    axes[1].set_title("Multi-seed Point-E")
+    axes[1].axis("off")
+
+    proj = np.max(variance_grid, axis=2) if variance_grid.ndim == 3 else variance_grid
+    im = axes[2].imshow(proj, cmap="jet", vmin=0, vmax=np.max(proj) + 1e-6)
+    axes[2].set_title("Variance Field")
+    axes[2].axis("off")
+    plt.colorbar(im, ax=axes[2], fraction=0.046, pad=0.04)
+
+    Path(save_path).parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(save_path, bbox_inches="tight", dpi=150)
+    plt.close()
+
+
+def create_trajectory_figure(steps_data: List[dict], save_path: str) -> None:
+    num_steps = len(steps_data)
+    fig, axes = plt.subplots(2, num_steps, figsize=(4 * num_steps, 6))
+    if num_steps == 1:
+        axes = np.expand_dims(axes, axis=1)
+
+    for i, step in enumerate(steps_data):
+        ax_rgb = axes[0, i]
+        ax_rgb.imshow(step['rgb'])
+        ax_rgb.set_title(f"Step {step['step_idx']}")
+        ax_rgb.axis("off")
+        
+        if i < num_steps - 1:
+            ax_rgb.arrow(
+                x=step['rgb'].shape[1] * 0.9, y=step['rgb'].shape[0] / 2, 
+                dx=20, dy=0, head_width=20, color='red'
+            )
+
+        ax_var = axes[1, i]
+        v_grid = step['variance']
+        proj = np.max(v_grid, axis=2) if v_grid.ndim == 3 else v_grid
+        ax_var.imshow(proj, cmap="inferno")
+        ax_var.set_title(f"Uncertainty: {np.sum(v_grid):.1f}")
+        ax_var.axis("off")
+
+    plt.tight_layout()
+    Path(save_path).parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(save_path, dpi=150)
+    plt.close()
+
+
+def plot_vrr_curves(results: Dict[str, List[float]], save_path: str) -> None:
+    plt.figure(figsize=(8, 6))
+    for method, variances in results.items():
+        steps = range(len(variances))
+        initial = variances[0] + 1e-8
+        vrr = [v / initial for v in variances]
+        plt.plot(steps, vrr, marker='o', label=method, linewidth=2)
+
+    plt.title("Variance Reduction Rate")
+    plt.xlabel("Step")
+    plt.ylabel("Normalized Variance")
+    plt.grid(True, linestyle='--', alpha=0.6)
+    plt.legend()
+    Path(save_path).parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(save_path, bbox_inches="tight")
+    plt.close()
+
+
+def plot_success_rates(success_rates: Dict[str, float], save_path: str) -> None:
+    plt.figure(figsize=(6, 6))
+    methods = list(success_rates.keys())
+    rates = list(success_rates.values())
+    colors = ['gray', 'orange', 'green']
+    bar_colors = [colors[i % len(colors)] for i in range(len(methods))]
+    
+    plt.bar(methods, rates, color=bar_colors, alpha=0.8)
+    plt.ylim(0, 1.05)
+    plt.title("Grasp Success Rate")
+    plt.ylabel("Success Rate")
+    
+    for i, v in enumerate(rates):
+        plt.text(i, v + 0.02, f"{v:.2f}", ha='center', fontweight='bold')
+
+    Path(save_path).parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(save_path, bbox_inches="tight")
+    plt.close()
+
+
+def overlay_point_clouds_open3d(point_clouds: List[np.ndarray]) -> None:
+    if o3d is None: return
     geoms = []
     for idx, pc in enumerate(point_clouds):
-        color = np.array(colorsys.hsv_to_rgb(idx / max(len(point_clouds), 1), 0.7, 1.0))
+        if len(pc) == 0: continue
+        hue = idx / max(len(point_clouds), 1)
+        color = np.array(colorsys.hsv_to_rgb(hue, 0.7, 1.0))
         pcd = o3d.geometry.PointCloud()
         pcd.points = o3d.utility.Vector3dVector(pc)
         pcd.colors = o3d.utility.Vector3dVector(np.tile(color, (pc.shape[0], 1)))
@@ -30,8 +168,7 @@ def overlay_point_clouds_open3d(point_clouds: List[np.ndarray]) -> None:
 
 
 def save_variance_max_projection(score_grid: np.ndarray, path: str) -> None:
-    """Save top-down max projection of variance/score grid."""
-    proj = np.max(score_grid, axis=2)
+    proj = np.max(score_grid, axis=2) if score_grid.ndim == 3 else score_grid
     proj = proj / (proj.max() + 1e-8)
     plt.figure(figsize=(4, 4))
     plt.imshow(proj, cmap="inferno")
@@ -39,17 +176,3 @@ def save_variance_max_projection(score_grid: np.ndarray, path: str) -> None:
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(path, bbox_inches="tight", pad_inches=0)
     plt.close()
-
-
-def save_trajectory_grid(images: List[np.ndarray], path: str) -> None:
-    """Save a horizontal strip of trajectory RGB images."""
-    if not images:
-        return
-    h, w, _ = images[0].shape
-    canvas = np.zeros((h, w * len(images), 3), dtype=np.uint8)
-    for i, img in enumerate(images):
-        canvas[:, i * w : (i + 1) * w] = img
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    import imageio
-
-    imageio.imwrite(path, canvas)
