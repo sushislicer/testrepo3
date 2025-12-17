@@ -1,12 +1,13 @@
 """
-Download a sample mesh from GSO (Google Scanned Objects).
-Automatically tries multiple common object names until one works.
+Download sample mesh (Rubber Duck) from Gazebo Fuel (Google Scanned Objects).
+Fallback to Stanford Bunny if Gazebo Fuel is unreachable.
 """
 
 import sys
 import requests
 import imageio
 import numpy as np
+import trimesh
 from pathlib import Path
 
 # --- Path Setup ---
@@ -18,75 +19,72 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.config import ActiveHallucinationConfig
 from src.simulator import VirtualTabletopSimulator
 
-# Save to a generic folder so downstream scripts don't break
-OUTPUT_DIR = PROJECT_ROOT / "assets" / "sample_object"
-BASE_URL = "https://raw.githubusercontent.com/kevinzakka/mujoco_scanned_objects/master/models"
+OUTPUT_DIR = PROJECT_ROOT / "assets" / "sample_duck"
 
-# List of likely models to try (GSO naming conventions can vary)
-CANDIDATE_MODELS = [
-    "Apple", 
-    "Banana", 
-    "Lemon", 
-    "Pear",
-    "Strawberry",
-    "Cup",
-    "Mug", 
-    "Bowl",
-    "Shoe",
-    "Cylindrical_Plastic_Bottle",
-    "Rubber_Duck", # Retry just in case
-    "Duck"
-]
+# Official Google Scanned Objects hosted on Gazebo Fuel (Bypasses GitHub LFS)
+# Note: We use 'tip' to get the latest version.
+BASE_FUEL_URL = "https://fuel.gazebosim.org/1.0/GoogleResearch/models/Rubber%20Duck/tip/files"
+FUEL_URLS = {
+    "model.obj": f"{BASE_FUEL_URL}/meshes/model.obj",
+    "texture.png": f"{BASE_FUEL_URL}/materials/textures/texture.png"
+}
 
-def check_url_exists(url: str) -> bool:
+# Fallback
+BUNNY_URL = "https://raw.githubusercontent.com/mikedh/trimesh/master/models/bunny.ply"
+
+
+def download_from_fuel(save_dir: Path) -> bool:
+    """Downloads the Rubber Duck from Gazebo Fuel."""
+    print(f"Attempting download from Gazebo Fuel (Rubber Duck)...")
+    save_dir.mkdir(parents=True, exist_ok=True)
+    
     try:
-        r = requests.head(url)
-        return r.status_code == 200
-    except:
-        return False
+        # 1. Download Mesh
+        print(f"  - Downloading OBJ...")
+        r_obj = requests.get(FUEL_URLS["model.obj"])
+        if r_obj.status_code != 200:
+            print(f"  [Failed] HTTP {r_obj.status_code}")
+            return False
+        with open(save_dir / "model.obj", "wb") as f:
+            f.write(r_obj.content)
 
-def download_file(url: str, save_path: Path) -> bool:
-    try:
-        r = requests.get(url)
-        if r.status_code == 200:
-            with open(save_path, 'wb') as f:
-                f.write(r.content)
-            print(f"  [OK] Saved {save_path.name}")
-            return True
+        # 2. Download Texture
+        print(f"  - Downloading Texture...")
+        r_tex = requests.get(FUEL_URLS["texture.png"])
+        if r_tex.status_code == 200:
+            with open(save_dir / "texture.png", "wb") as f:
+                f.write(r_tex.content)
+        else:
+            print("  [Warning] Texture not found (using mesh without texture).")
+
+        print("  [Success] Downloaded GSO Rubber Duck.")
+        return True
     except Exception as e:
         print(f"  [Error] {e}")
-    return False
+        return False
+
+
+def download_fallback_bunny(save_dir: Path) -> None:
+    """Fallback to Stanford Bunny if Fuel fails."""
+    print("\n[Fallback] Downloading Stanford Bunny...")
+    save_dir.mkdir(parents=True, exist_ok=True)
+    
+    mesh = trimesh.load(requests.get(BUNNY_URL).content, file_type='ply')
+    if hasattr(mesh.visual, 'vertex_colors'):
+        mesh.visual.vertex_colors = [255, 200, 50, 255] # Yellow-ish (Mocking a duck)
+    
+    mesh.apply_translation(-mesh.centroid)
+    mesh.export(save_dir / "model.obj")
+    print("  [Success] Saved Stanford Bunny as model.obj")
+
 
 def main() -> None:
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    # 1. Try Gazebo Fuel (GSO)
+    success = download_from_fuel(OUTPUT_DIR)
     
-    selected_model = None
-    print(f"Searching for a valid model in {BASE_URL}...")
-
-    # 1. Find a valid model
-    for model_name in CANDIDATE_MODELS:
-        test_url = f"{BASE_URL}/{model_name}/model.obj"
-        print(f"Checking: {model_name}...", end=" ", flush=True)
-        if check_url_exists(test_url):
-            print("FOUND!")
-            selected_model = model_name
-            break
-        else:
-            print("Not found.")
-
-    if not selected_model:
-        print("\n[Error] Could not find any of the candidate models in the repository.")
-        print("Please manually check 'kevinzakka/mujoco_scanned_objects' on GitHub for a valid name.")
-        return
-
-    # 2. Download Files
-    print(f"\nDownloading '{selected_model}' to {OUTPUT_DIR}...")
-    success_obj = download_file(f"{BASE_URL}/{selected_model}/model.obj", OUTPUT_DIR / "model.obj")
-    success_tex = download_file(f"{BASE_URL}/{selected_model}/texture.png", OUTPUT_DIR / "texture.png")
-
-    if not success_obj:
-        print("Failed to download model.obj")
-        return
+    # 2. Fallback
+    if not success:
+        download_fallback_bunny(OUTPUT_DIR)
 
     # 3. Render Input Image
     print("\nRendering input view...")
@@ -95,18 +93,24 @@ def main() -> None:
         cfg.simulator.mesh_path = str(OUTPUT_DIR / "model.obj")
         cfg.simulator.intrinsics.width = 512
         cfg.simulator.intrinsics.height = 512
-
+        
+        # Initialize Simulator
         sim = VirtualTabletopSimulator(cfg.simulator)
+        
+        # Render
         rgb, _ = sim.render_view(idx=0)
-
+        
         image_path = OUTPUT_DIR / "input_rgb.png"
         imageio.imwrite(image_path, rgb.astype(np.uint8))
-        print(f"[Success] Setup complete.")
-        print(f"Mesh:  {OUTPUT_DIR / 'model.obj'}")
-        print(f"Image: {image_path}")
-
+        
+        print(f"[Complete]")
+        print(f"  -> Mesh:  {OUTPUT_DIR / 'model.obj'}")
+        print(f"  -> Image: {image_path}")
+        
     except Exception as e:
-        print(f"Rendering failed (check simulator/pyrender installation): {e}")
+        print(f"Rendering failed: {e}")
+        print("Hint: If on Colab, ensure you have EGL installed.")
+
 
 if __name__ == "__main__":
     main()
