@@ -1,5 +1,6 @@
 """
 Sanity Check: Semantic Variance Field Integration.
+Location: src/tests/sanity_check_semantic.py
 Usage: python src/tests/sanity_check_semantic.py --image assets/images/chair.png --prompt "leg" --seeds 10
 """
 
@@ -12,7 +13,6 @@ from pathlib import Path
 
 import numpy as np
 import matplotlib.pyplot as plt
-import open3d as o3d
 from PIL import Image
 
 CURRENT_SCRIPT_PATH = Path(__file__).resolve()
@@ -20,6 +20,13 @@ PROJECT_ROOT = CURRENT_SCRIPT_PATH.parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
+# --- Headless Import Safety ---
+try:
+    import open3d as o3d
+except ImportError:
+    o3d = None
+
+# --- Internal Imports ---
 from src.config import ActiveHallucinationConfig
 from src.pointe_wrapper import PointEGenerator
 from src.segmentation import CLIPSegSegmenter, compute_point_mask_weights
@@ -60,21 +67,25 @@ def resolve_image_path(path_str: str) -> Path:
     raise FileNotFoundError(f"Image not found: {path_str}")
 
 
-def save_fallback_visualizations(pcd: o3d.geometry.PointCloud, save_dir: Path, prompt: str) -> None:
+def save_fallback_visualizations(pcd_points: np.ndarray, pcd_colors: np.ndarray, save_dir: Path, prompt: str) -> None:
+    """Saves static files if Open3D window cannot open."""
     save_dir.mkdir(parents=True, exist_ok=True)
     
-    # Save 3D PLY
-    ply_path = save_dir / "sanity_semantic.ply"
-    o3d.io.write_point_cloud(str(ply_path), pcd)
-    print(f"Saved 3D cloud: {ply_path}")
+    # 1. Save 3D PLY
+    if o3d is not None:
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(pcd_points)
+        pcd.colors = o3d.utility.Vector3dVector(pcd_colors)
+        ply_path = save_dir / "sanity_semantic.ply"
+        o3d.io.write_point_cloud(str(ply_path), pcd)
+        print(f"Saved 3D cloud: {ply_path}")
 
-    # Save 2D Scatter Diagram
-    points = np.asarray(pcd.points)
-    colors = np.asarray(pcd.colors)
-    if len(points) == 0: return
+    # 2. Save 2D Scatter Diagram
+    if len(pcd_points) == 0: return
 
     plt.figure(figsize=(8, 8))
-    plt.scatter(points[:, 0], points[:, 1], c=colors, s=10, alpha=0.8)
+    # Plot X vs Y (Top down)
+    plt.scatter(pcd_points[:, 0], pcd_points[:, 1], c=pcd_colors, s=10, alpha=0.8)
     plt.title(f"Semantic Score: '{prompt}' (Yellow=High)")
     plt.axis('equal')
     png_path = save_dir / "sanity_semantic.png"
@@ -147,23 +158,28 @@ def main():
     xyz = score_points[:, :3]
     scores = score_points[:, 3]
     
-    pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(xyz)
-    
+    # Prepare Data for Visualization
     # Colormap: Purple (Low) -> Yellow (High)
     colors = np.zeros((len(scores), 3))
     colors[:, 0] = scores          # Red
     colors[:, 1] = scores * 0.8    # Green
     colors[:, 2] = 1.0 - scores    # Blue
-    pcd.colors = o3d.utility.Vector3dVector(colors)
-    axes = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1)
-    
+
+    # Attempt Interactive Window
     try:
+        if o3d is None: raise ImportError("Open3D not available")
         print("Attempting interactive window...")
+        
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(xyz)
+        pcd.colors = o3d.utility.Vector3dVector(colors)
+        
+        axes = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1)
         o3d.visualization.draw_geometries([pcd, axes], window_name=f"Semantic: {args.prompt}")
+        
     except Exception as exc:
         print(f"Window unavailable ({exc}). Saving fallbacks...")
-        save_fallback_visualizations(pcd, PROJECT_ROOT / "outputs", args.prompt)
+        save_fallback_visualizations(xyz, colors, PROJECT_ROOT / "outputs", args.prompt)
 
 
 if __name__ == "__main__":
