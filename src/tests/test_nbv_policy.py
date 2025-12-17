@@ -1,10 +1,14 @@
-"""Unit tests for NBV policies."""
+"""
+Unit tests for NBV policies.
+Usage: python src/tests/test_nbv_policy.py
+"""
 
 import unittest
 import sys
 import random
 import math
 import numpy as np
+import matplotlib.pyplot as plt
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -89,18 +93,15 @@ class TestNBVPolicies(unittest.TestCase):
         self.assertEqual(next_view, 2)
 
     def test_baseline_geometric(self):
-        # Should pick farthest unvisited view (180 deg)
         visited = {0}
         next_view = select_next_view_geometric(0, self.poses, visited)
         self.assertEqual(next_view, 2)
         
-        # Should pick 90 deg neighbor if 180 is visited
         visited = {0, 2}
         next_view = select_next_view_geometric(0, self.poses, visited)
         self.assertIn(next_view, [1, 3])
 
     def test_active_hallucination_alignment(self):
-        # Target at -0.5 (back); Camera 2 (-2.0) has best view
         target_centroid = np.array([-0.5, 0.0, 0.0])
         visited = {0}
         next_view, _ = select_next_view_active(0, self.poses, target_centroid, visited, self.cfg)
@@ -117,6 +118,51 @@ class TestNBVPolicies(unittest.TestCase):
         _, score_sharp = select_next_view_active(0, self.poses, target, visited, self.cfg)
         
         self.assertNotEqual(score_linear, score_sharp)
+
+    def test_visualize_selection_logic(self):
+        """Generates a 2D diagram to verify selection logic visually."""
+        # Scenario: Target is Back-Left (-X, +Y)
+        target = np.array([-1.0, 1.0, 0.0])
+        visited = {0}
+        next_view, score = select_next_view_active(0, self.poses, target, visited, self.cfg)
+
+        # Plot setup
+        fig, ax = plt.subplots(figsize=(6, 6))
+        
+        # Plot Cameras
+        for i, p in enumerate(self.poses):
+            color = 'blue'
+            label = f"Cam {i}"
+            if i in visited:
+                color = 'gray'
+                label += " (Visited)"
+            if i == next_view:
+                color = 'lime'
+                label += " (Selected)"
+
+            ax.scatter(p.position[0], p.position[1], c=color, s=150, edgecolors='k', label=label)
+            
+            # Arrow for view direction
+            d = _view_direction(p)
+            ax.arrow(p.position[0], p.position[1], d[0]*0.5, d[1]*0.5, 
+                     head_width=0.1, head_length=0.1, fc=color, ec='k')
+
+        # Plot Target
+        ax.scatter(target[0], target[1], c='red', marker='x', s=100, label="Variance Target")
+        
+        # Labels
+        ax.set_title(f"Active Policy Debug\nTarget: {target} -> Selected: Cam {next_view}")
+        ax.set_xlabel("X (World)")
+        ax.set_ylabel("Y (World)")
+        ax.grid(True, linestyle='--')
+        ax.legend(loc='lower right')
+        ax.axis('equal')
+
+        out_path = PROJECT_ROOT / "outputs" / "test_nbv_policy_debug.png"
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(out_path)
+        plt.close()
+        print(f"\n[Test] Saved policy debug diagram to: {out_path}")
 
 
 if __name__ == '__main__':

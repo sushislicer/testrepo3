@@ -1,7 +1,6 @@
 """
 Sanity check: Ghosting artifacts via variance field.
-Location: src/tests/sanity_check_ghosting.py
-Usage: python src/tests/sanity_check_ghosting.py --image assets/images/chair.png
+Usage: python src/tests/sanity_check_ghosting.py --image assets/images/chair.png --resolution 64
 """
 
 from __future__ import annotations
@@ -10,6 +9,7 @@ import argparse
 import sys
 from pathlib import Path
 import numpy as np
+import matplotlib.pyplot as plt
 import open3d as o3d
 from PIL import Image
 
@@ -33,16 +33,36 @@ def parse_args():
 
 def resolve_image_path(path_str: str) -> Path:
     path = Path(path_str)
-    if path.exists():
-        return path
+    if path.exists(): return path
     asset_path = PROJECT_ROOT / "assets" / "images" / path_str
-    if asset_path.exists():
-        return asset_path
-    # Fallback to direct path from root if user provided full path string
+    if asset_path.exists(): return asset_path
     root_path = PROJECT_ROOT / path_str
-    if root_path.exists():
-        return root_path
+    if root_path.exists(): return root_path
     raise FileNotFoundError(f"Image not found: {path_str}")
+
+
+def save_fallback_visualizations(pcd: o3d.geometry.PointCloud, save_dir: Path) -> None:
+    save_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Save 3D PLY
+    ply_path = save_dir / "sanity_ghosting.ply"
+    o3d.io.write_point_cloud(str(ply_path), pcd)
+    print(f"Saved 3D cloud: {ply_path}")
+
+    # Save 2D Heatmap Diagram
+    points = np.asarray(pcd.points)
+    colors = np.asarray(pcd.colors)
+    if len(points) == 0: return
+
+    plt.figure(figsize=(8, 8))
+    # Top-down projection (X vs Y)
+    plt.scatter(points[:, 0], points[:, 1], c=colors, s=10, alpha=0.8)
+    plt.title("Variance Heatmap (Red=High, Blue=Low)")
+    plt.axis('equal')
+    png_path = save_dir / "sanity_ghosting.png"
+    plt.savefig(png_path)
+    plt.close()
+    print(f"Saved 2D heatmap: {png_path}")
 
 
 def main():
@@ -84,12 +104,11 @@ def main():
     axes = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1)
     
     try:
+        print("Attempting interactive window...")
         o3d.visualization.draw_geometries([pcd, axes], window_name="Ghosting Check")
-    except Exception:
-        out_path = PROJECT_ROOT / "outputs" / "sanity_ghosting.ply"
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        o3d.io.write_point_cloud(str(out_path), pcd)
-        print(f"Headless mode. Saved to {out_path}")
+    except Exception as exc:
+        print(f"Window unavailable ({exc}). Saving fallbacks...")
+        save_fallback_visualizations(pcd, PROJECT_ROOT / "outputs")
 
 
 if __name__ == "__main__":

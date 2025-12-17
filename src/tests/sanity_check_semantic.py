@@ -1,16 +1,6 @@
 """
 Sanity Check: Semantic Variance Field Integration.
-
-Location: src/tests/sanity_check_semantic.py
-
-This script verifies the full pipeline:
-1. Image -> Point-E (3D Clouds)
-2. Image -> CLIPSeg (2D Mask)
-3. 2D Mask + 3D Clouds -> Projection -> Semantic Voxel Grid
-4. Semantic Grid * Variance Grid -> Final Score Field
-
-Usage:
-    python src/tests/sanity_check_semantic.py --image assets/images/mug.png --prompt "handle"
+Usage: python src/tests/sanity_check_semantic.py --image assets/images/chair.png --prompt "leg" --seeds 10
 """
 
 from __future__ import annotations
@@ -21,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+import matplotlib.pyplot as plt
 import open3d as o3d
 from PIL import Image
 
@@ -50,15 +41,10 @@ class SimpleIntrinsics:
 
 
 def get_virtual_camera(image_size: int = 512):
-    """
-    Creates a virtual camera positioned to view the Point-E object from the front.
-    Point-E usually generates objects centered at (0,0,0) within a unit cube.
-    """
-    focal = image_size  # Approx 53 degrees FOV
+    focal = image_size
     intrinsics = SimpleIntrinsics(
         fx=focal, fy=focal, cx=image_size / 2, cy=image_size / 2
     )
-    # Place camera at (0, 0, 2.0) looking at (0, 0, 0)
     cam_to_world = np.eye(4, dtype=np.float32)
     cam_to_world[:3, 3] = [0.0, 0.0, 2.0]
     return cam_to_world, intrinsics
@@ -66,22 +52,42 @@ def get_virtual_camera(image_size: int = 512):
 
 def resolve_image_path(path_str: str) -> Path:
     path = Path(path_str)
-    if path.exists():
-        return path
+    if path.exists(): return path
     asset_path = PROJECT_ROOT / "assets" / "images" / path_str
-    if asset_path.exists():
-        return asset_path
+    if asset_path.exists(): return asset_path
     root_path = PROJECT_ROOT / path_str
-    if root_path.exists():
-        return root_path
+    if root_path.exists(): return root_path
     raise FileNotFoundError(f"Image not found: {path_str}")
+
+
+def save_fallback_visualizations(pcd: o3d.geometry.PointCloud, save_dir: Path, prompt: str) -> None:
+    save_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Save 3D PLY
+    ply_path = save_dir / "sanity_semantic.ply"
+    o3d.io.write_point_cloud(str(ply_path), pcd)
+    print(f"Saved 3D cloud: {ply_path}")
+
+    # Save 2D Scatter Diagram
+    points = np.asarray(pcd.points)
+    colors = np.asarray(pcd.colors)
+    if len(points) == 0: return
+
+    plt.figure(figsize=(8, 8))
+    plt.scatter(points[:, 0], points[:, 1], c=colors, s=10, alpha=0.8)
+    plt.title(f"Semantic Score: '{prompt}' (Yellow=High)")
+    plt.axis('equal')
+    png_path = save_dir / "sanity_semantic.png"
+    plt.savefig(png_path)
+    plt.close()
+    print(f"Saved 2D diagram: {png_path}")
 
 
 def main():
     parser = argparse.ArgumentParser(description="Test Semantic Variance Field.")
-    parser.add_argument("--image", type=str, required=True, help="Path to input image.")
-    parser.add_argument("--prompt", type=str, default="handle", help="Text prompt for CLIPSeg.")
-    parser.add_argument("--seeds", type=int, default=5, help="Number of Point-E clouds.")
+    parser.add_argument("--image", type=str, required=True, help="Input image.")
+    parser.add_argument("--prompt", type=str, default="handle", help="Text prompt.")
+    parser.add_argument("--seeds", type=int, default=5, help="Point-E seeds.")
     args = parser.parse_args()
 
     try:
@@ -123,8 +129,6 @@ def main():
     score_grid = combine_variance_and_semantics(var_grid, sem_grid)
 
     print(f"\n--- Results ---")
-    print(f"Max Variance: {var_grid.max():.4f}")
-    print(f"Max Semantic: {sem_grid.max():.4f}")
     print(f"Max Combined: {score_grid.max():.4f}")
     
     if score_grid.max() == 0:
@@ -155,11 +159,11 @@ def main():
     axes = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1)
     
     try:
+        print("Attempting interactive window...")
         o3d.visualization.draw_geometries([pcd, axes], window_name=f"Semantic: {args.prompt}")
-    except Exception:
-        out_path = PROJECT_ROOT / "outputs" / "semantic_check.ply"
-        o3d.io.write_point_cloud(str(out_path), pcd)
-        print(f"Headless environment detected. Saved PLY to {out_path}")
+    except Exception as exc:
+        print(f"Window unavailable ({exc}). Saving fallbacks...")
+        save_fallback_visualizations(pcd, PROJECT_ROOT / "outputs", args.prompt)
 
 
 if __name__ == "__main__":

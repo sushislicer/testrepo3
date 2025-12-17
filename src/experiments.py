@@ -26,6 +26,11 @@ from .nbv_policy import (
     select_next_view_random,
     select_next_view_geometric,
 )
+from .visualization import (
+    create_ghosting_figure,
+    create_trajectory_figure,
+    plot_vrr_curves,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +70,6 @@ class ActiveHallucinationRunner:
 
         imageio.imwrite(self._output_root / f"step_{step:02d}_rgb.png", rgb.astype(np.uint8))
         imageio.imwrite(self._output_root / f"step_{step:02d}_mask.png", (mask * 255).astype(np.uint8))
-        # Save max-projection of score grid for quick inspection
         proj = np.max(score_grid, axis=2)
         proj = (proj / (proj.max() + 1e-8) * 255).astype(np.uint8)
         imageio.imwrite(self._output_root / f"step_{step:02d}_score.png", proj)
@@ -75,6 +79,8 @@ class ActiveHallucinationRunner:
         poses = self.sim.list_poses()
         visited: Set[int] = set()
         logs: List[StepLog] = []
+        vis_trajectory: List[Dict] = []
+        
         current = initial_view % len(poses)
         visited.add(current)
 
@@ -102,6 +108,21 @@ class ActiveHallucinationRunner:
             semantic_grid = accumulate_semantic_weights(clouds, point_weights, cfg.variance)
             score_grid = combine_variance_and_semantics(variance_grid, semantic_grid)
             centroid, _ = extract_topk_centroid(score_grid, grid, cfg.variance.topk_ratio)
+
+            # --- Visualization Hooks ---
+            if cfg.experiment.save_debug:
+                # Ghosting Figure (Step 0)
+                if step == 0:
+                    create_ghosting_figure(
+                        rgb, clouds, variance_grid, 
+                        str(self._output_root / "fig_ghosting_step0.png")
+                    )
+                # Collect data for trajectory strip
+                vis_trajectory.append({
+                    "rgb": rgb,
+                    "variance": score_grid,  # visualizing combined score for trajectory
+                    "step_idx": step
+                })
 
             distance_to_gt = None
             success_flag = None
@@ -141,6 +162,14 @@ class ActiveHallucinationRunner:
         success_at_k = logs[-1].success if logs else None
         dist_at_k = logs[-1].distance_to_gt if logs else None
 
+        # --- Final Visualization ---
+        if cfg.experiment.save_debug:
+            create_trajectory_figure(vis_trajectory, str(self._output_root / "fig_trajectory.png"))
+            plot_vrr_curves(
+                {cfg.experiment.policy: variance_sums}, 
+                str(self._output_root / "fig_vrr.png")
+            )
+
         result = {
             "config": cfg.to_dict(),
             "steps": [asdict(l) for l in logs],
@@ -171,7 +200,6 @@ class ActiveHallucinationRunner:
         return [(baseline - v) / denom for v in variance_sums]
 
     def _save_csv(self, logs: List[StepLog], vrr: List[float]) -> None:
-        """Save per-step metrics as CSV for quick analysis."""
         path = self._output_root / "trajectory_metrics.csv"
         import csv
 
