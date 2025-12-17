@@ -1,4 +1,6 @@
-"""Inspect 3D Meshes with selectable backend (Open3D/Pyrender) and headless fallback."""
+"""
+Inspect 3D Meshes with selectable backend (Open3D/Pyrender) and headless fallback.
+"""
 
 from __future__ import annotations
 

@@ -54,17 +54,14 @@ def resolve_image_path(name_or_path: str) -> Path:
 
 
 def save_fallback_diagrams(points: np.ndarray, save_dir: Path) -> None:
-    """Save 3D PLY and 2D Scatter plot when window fails."""
     if len(points) == 0: return
     
     xyz = points[:, :3]
     scores = points[:, 3]
 
-    # 1. Save PLY
     if o3d is not None:
         pcd = o3d.geometry.PointCloud()
         pcd.points = o3d.utility.Vector3dVector(xyz)
-        # Color map: Plasma
         cmap = plt.get_cmap("plasma")
         colors = cmap(scores)[:, :3]
         pcd.colors = o3d.utility.Vector3dVector(colors)
@@ -73,7 +70,6 @@ def save_fallback_diagrams(points: np.ndarray, save_dir: Path) -> None:
         o3d.io.write_point_cloud(str(ply_path), pcd)
         print(f"Saved 3D PLY to: {ply_path}")
 
-    # 2. Save 2D Diagram
     plt.figure(figsize=(8, 8))
     plt.scatter(xyz[:, 0], xyz[:, 1], c=scores, cmap="plasma", s=10, alpha=0.8)
     plt.colorbar(label="Variance/Score")
@@ -131,11 +127,25 @@ def main() -> None:
     np.save(out_dir / "variance_points.npy", points)
     print(f"Saved variance projection and points to {out_dir}")
 
-    # Visualization Logic
-    if args.view and len(points) > 0 and o3d is not None:
-        pcd = o3d.geometry.PointCloud()
-        pcd.points = o3d.utility.Vector3dVector(points[:, :3])
-        # Simple color mapping for view
-        scores = points[:, 3]
-        colors = np.zeros((len(scores), 3))
-        colors[:, 0] = scores; colors[:, 1] = scores
+    if args.view:
+        if len(points) > 0 and o3d is not None:
+            pcd = o3d.geometry.PointCloud()
+            pcd.points = o3d.utility.Vector3dVector(points[:, :3])
+            scores = points[:, 3]
+            colors = np.zeros((len(scores), 3))
+            colors[:, 0] = scores; colors[:, 1] = scores * 0.5; colors[:, 2] = 1 - scores
+            pcd.colors = o3d.utility.Vector3dVector(colors)
+            
+            try:
+                print("Attempting interactive window...")
+                o3d.visualization.draw_geometries([pcd])
+            except Exception as exc:
+                print(f"Window unavailable ({exc}). Saving fallbacks...")
+                save_fallback_diagrams(points, out_dir)
+        else:
+            print("Open3D not found or empty points. Saving fallback diagram...")
+            save_fallback_diagrams(points, out_dir)
+
+
+if __name__ == "__main__":
+    main()
