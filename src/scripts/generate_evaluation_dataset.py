@@ -29,13 +29,11 @@ def create_mug(rng: np.random.RandomState) -> trimesh.Trimesh:
     body = trimesh.creation.cylinder(radius=radius, height=height)
     
     if rng.rand() > 0.5:
-        # Curved handle
         h_rad, h_out = rng.uniform(0.05, 0.08), rng.uniform(0.15, 0.25)
         handle = trimesh.creation.annulus(r_min=h_rad, r_max=h_out, height=rng.uniform(0.3, 0.5))
         handle.apply_transform(trimesh.transformations.rotation_matrix(np.pi/2, [1, 0, 0]))
         handle.apply_translation([radius + h_rad, 0, 0])
     else:
-        # Square handle
         ext = [rng.uniform(0.2, 0.3), 0.08, height * 0.6]
         handle = trimesh.creation.box(extents=ext)
         handle.apply_translation([radius + ext[0]/2 - 0.02, 0, 0])
@@ -67,8 +65,6 @@ def create_hammer(rng: np.random.RandomState) -> trimesh.Trimesh:
     
     handle_len = rng.uniform(0.6, 0.9)
     handle = trimesh.creation.cylinder(radius=0.04, height=handle_len)
-    
-    # Position head on top of handle
     head.apply_translation([0, 0, handle_len/2 + head_yz/2])
     
     mesh = trimesh.util.concatenate([head, handle])
@@ -78,27 +74,19 @@ def create_hammer(rng: np.random.RandomState) -> trimesh.Trimesh:
 
 def main():
     ASSETS_DIR.mkdir(parents=True, exist_ok=True)
-    categories = {
-        "mugs": create_mug,
-        "pans": create_pan,
-        "tools": create_hammer
-    }
+    categories = {"mugs": create_mug, "pans": create_pan, "tools": create_hammer}
 
-    print(f"Generating evaluation dataset in {ASSETS_DIR}...")
-
-    for cat, creator_func in categories.items():
+    print(f"Generating dataset in {ASSETS_DIR}...")
+    for cat, func in categories.items():
         cat_dir = ASSETS_DIR / cat
         cat_dir.mkdir(parents=True, exist_ok=True)
-        print(f"  Generating {cat}...")
-        
         for i in range(10):
             rng = np.random.RandomState(i)
-            mesh = creator_func(rng)
+            mesh = func(rng)
             filename = cat_dir / f"{cat[:-1]}_{i:02d}.obj"
             mesh.export(filename)
-    
-    print("\n[Ready] Run batch experiments:")
-    print('python src/scripts/run_experiments.py --mesh_glob "assets/meshes/**/*.obj" --trials 2')
+            
+    print("Done. Meshes ready.")
 
 
 if __name__ == "__main__":

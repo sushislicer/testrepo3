@@ -1,8 +1,9 @@
-"""Generates a partially occluded mug mesh for testing."""
+"""Generates a partially occluded mug mesh. Renders image if possible."""
 
 from __future__ import annotations
 
 import sys
+import os
 import numpy as np
 import trimesh
 import imageio
@@ -13,8 +14,7 @@ PROJECT_ROOT = CURRENT_SCRIPT_PATH.parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
-from src.config import ActiveHallucinationConfig
-from src.simulator import VirtualTabletopSimulator
+# Note: We do NOT import simulator here to avoid early crashes on machines without EGL.
 
 ASSETS_DIR = PROJECT_ROOT / "assets"
 MESH_OUT = ASSETS_DIR / "meshes" / "example.obj"
@@ -35,7 +35,6 @@ def create_partial_mug() -> trimesh.Trimesh:
     # Rotate 150 degrees: Handle peeks out slightly
     rot = trimesh.transformations.rotation_matrix(np.radians(150), [0, 0, 1])
     mesh.apply_transform(rot)
-
     return mesh
 
 
@@ -43,25 +42,36 @@ def main():
     MESH_OUT.parent.mkdir(parents=True, exist_ok=True)
     IMAGE_OUT.parent.mkdir(parents=True, exist_ok=True)
 
+    # 1. Generate Mesh (Always works)
     print("Generating mesh...")
     mesh = create_partial_mug()
     mesh.export(MESH_OUT)
-    print(f"Saved: {MESH_OUT}")
+    print(f"Saved mesh: {MESH_OUT}")
 
-    print("Rendering view...")
-    cfg = ActiveHallucinationConfig()
-    cfg.simulator.mesh_path = str(MESH_OUT)
-    cfg.simulator.intrinsics.width = 512
-    cfg.simulator.intrinsics.height = 512
-    cfg.simulator.background_color = [1.0, 1.0, 1.0]
-
+    # 2. Attempt Rendering (Might fail on some systems)
+    print("Attempting to render view...")
     try:
+        # Enable EGL if headless linux
+        if sys.platform == "linux" and not os.environ.get("DISPLAY"):
+            os.environ["PYOPENGL_PLATFORM"] = "egl"
+
+        from src.config import ActiveHallucinationConfig
+        from src.simulator import VirtualTabletopSimulator
+
+        cfg = ActiveHallucinationConfig()
+        cfg.simulator.mesh_path = str(MESH_OUT)
+        cfg.simulator.intrinsics.width = 512
+        cfg.simulator.intrinsics.height = 512
+        cfg.simulator.background_color = [1.0, 1.0, 1.0]
+
         sim = VirtualTabletopSimulator(cfg.simulator)
         rgb, _ = sim.render_view(idx=0)
         imageio.imwrite(IMAGE_OUT, rgb.astype(np.uint8))
-        print(f"Saved: {IMAGE_OUT}")
+        print(f"Saved image: {IMAGE_OUT}")
+
     except Exception as e:
-        print(f"Render failed: {e}")
+        print(f"[Warning] Rendering skipped: {e}")
+        print("Mesh was saved successfully. You can proceed with experiments using the mesh.")
 
 
 if __name__ == "__main__":
