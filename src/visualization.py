@@ -1,8 +1,9 @@
-"""Lightweight visualization utilities."""
+"""Lightweight visualization utilities for figures and debugging."""
 
 from __future__ import annotations
 
 import colorsys
+import logging
 from pathlib import Path
 from typing import List, Dict, Optional
 
@@ -14,46 +15,102 @@ try:
 except ImportError:
     o3d = None
 
+logger = logging.getLogger(__name__)
+
+
+def render_fallback_2d(point_clouds: List[np.ndarray], save_path: Optional[str] = None) -> np.ndarray:
+    """
+    Matplotlib fallback: Renders a 2D projection (Top-down X-Y) if Open3D fails.
+    """
+    fig = plt.figure(figsize=(5, 5), dpi=100)
+    ax = fig.add_subplot(111)
+    
+    # Plot clouds
+    for idx, pc in enumerate(point_clouds):
+        if len(pc) == 0: continue
+        # Subsample for speed
+        if len(pc) > 1000:
+            pc = pc[np.random.choice(len(pc), 1000, replace=False)]
+            
+        hue = idx / max(len(point_clouds), 1)
+        color = colorsys.hsv_to_rgb(hue, 0.8, 1.0)
+        
+        # X vs Y projection
+        ax.scatter(pc[:, 0], pc[:, 1], s=1, color=color, alpha=0.5)
+
+    ax.axis('equal')
+    ax.axis('off')
+    plt.tight_layout(pad=0)
+    
+    # Convert figure to numpy array
+    fig.canvas.draw()
+    data = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
+    w, h = fig.canvas.get_width_height()
+    image = data.reshape((h, w, 3))
+    
+    if save_path:
+        Path(save_path).parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(save_path)
+        
+    plt.close(fig)
+    return image
+
 
 def render_point_cloud_overlay(
     point_clouds: List[np.ndarray],
     save_path: Optional[str] = None,
     view_point: Optional[dict] = None
 ) -> np.ndarray:
+    """
+    Render K point clouds. Tries Open3D (3D render) -> Falls back to Matplotlib (2D).
+    """
     if o3d is None:
-        return np.zeros((512, 512, 3), dtype=np.uint8)
+        return render_fallback_2d(point_clouds, save_path)
 
-    vis = o3d.visualization.Visualizer()
+    # Attempt Open3D Headless
     try:
+        vis = o3d.visualization.Visualizer()
         vis.create_window(visible=False, width=800, height=800)
-    except Exception:
-        vis.create_window(visible=True, width=800, height=800)
-
-    for idx, pc in enumerate(point_clouds):
-        if len(pc) == 0: continue
-        hue = idx / max(len(point_clouds), 1)
-        color = np.array(colorsys.hsv_to_rgb(hue, 0.8, 1.0))
         
-        pcd = o3d.geometry.PointCloud()
-        pcd.points = o3d.utility.Vector3dVector(pc)
-        pcd.colors = o3d.utility.Vector3dVector(np.tile(color, (pc.shape[0], 1)))
-        vis.add_geometry(pcd)
+        has_geo = False
+        for idx, pc in enumerate(point_clouds):
+            if len(pc) == 0: continue
+            has_geo = True
+            hue = idx / max(len(point_clouds), 1)
+            color = np.array(colorsys.hsv_to_rgb(hue, 0.8, 1.0))
+            
+            pcd = o3d.geometry.PointCloud()
+            pcd.points = o3d.utility.Vector3dVector(pc)
+            pcd.colors = o3d.utility.Vector3dVector(np.tile(color, (pc.shape[0], 1)))
+            vis.add_geometry(pcd)
 
-    ctr = vis.get_view_control()
-    if not view_point:
-        ctr.rotate(10.0, 0.0)
+        if not has_geo:
+            vis.destroy_window()
+            return np.zeros((800, 800, 3), dtype=np.uint8)
 
-    vis.poll_events()
-    vis.update_renderer()
-    image = vis.capture_screen_float_buffer(do_render=True)
-    image_np = (np.asarray(image) * 255).astype(np.uint8)
-    vis.destroy_window()
+        ctr = vis.get_view_control()
+        if ctr is None:
+            raise RuntimeError("ViewControl failed")
 
-    if save_path:
-        Path(save_path).parent.mkdir(parents=True, exist_ok=True)
-        plt.imsave(save_path, image_np)
-        
-    return image_np
+        if not view_point:
+            ctr.rotate(10.0, 0.0)
+
+        vis.poll_events()
+        vis.update_renderer()
+        image = vis.capture_screen_float_buffer(do_render=True)
+        image_np = (np.asarray(image) * 255).astype(np.uint8)
+        vis.destroy_window()
+
+        if save_path:
+            Path(save_path).parent.mkdir(parents=True, exist_ok=True)
+            plt.imsave(save_path, image_np)
+            
+        return image_np
+
+    except Exception as e:
+        logger.warning(f"Open3D rendering failed ({e}). Using 2D fallback.")
+        if 'vis' in locals(): vis.destroy_window()
+        return render_fallback_2d(point_clouds, save_path)
 
 
 def create_ghosting_figure(
