@@ -1,4 +1,6 @@
-"""Sanity check: Ghosting artifacts via variance field."""
+"""Sanity check: Ghosting artifacts via variance field.
+Usage: python -m src.tests.sanity_check_ghosting --image horse.png --resolution 64
+"""
 
 from __future__ import annotations
 

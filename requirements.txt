@@ -18,4 +18,3 @@ safetensors>=0.4.0
 pyyaml>=6.0.1
 pandas>=2.1.0
 imageio>=2.34.0
---extra-index-url git+https://github.com/openai/point-e.git

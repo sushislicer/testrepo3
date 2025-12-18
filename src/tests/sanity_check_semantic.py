@@ -42,7 +42,7 @@ def get_virtual_camera(image_size: int = 512):
     focal = image_size
     intrinsics = SimpleIntrinsics(fx=focal, fy=focal, cx=image_size/2, cy=image_size/2)
     cam_to_world = np.eye(4, dtype=np.float32)
-    cam_to_world[:3, 3] = [0.0, 0.0, 2.0]
+    cam_to_world[:3, 3] = [0.0, 0.0, 4.0]
     return cam_to_world, intrinsics
 
 
