@@ -1,14 +1,16 @@
-"""Point-E integration with multi-seed sampling and graceful CPU fallback."""
+"""Point-E integration with multi-seed sampling and auto-alignment."""
 
 from __future__ import annotations
 
 import logging
 import random
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
+import cv2
 import numpy as np
 import torch
+from PIL import Image
 
 from .config import PointEConfig
 
@@ -24,12 +26,7 @@ def _set_seed(seed: int) -> None:
 
 
 class PointEGenerator:
-    """Thin wrapper around OpenAI's Point-E for multi-seed point cloud sampling.
-
-    When the Point-E package or weights are unavailable, it falls back to
-    generating structured random point clouds to keep the pipeline runnable
-    for debugging on CPU-only machines.
-    """
+    """Wrapper for Point-E with auto-cropping and multi-seed sampling."""
 
     def __init__(self, cfg: PointEConfig):
         self.cfg = cfg
@@ -47,10 +44,13 @@ class PointEGenerator:
 
             base_name = "base40M"
             upsampler_name = "upsample"
+            
+            # Load Base
             base_model = model_from_config(MODEL_CONFIGS[base_name], self.device)
             base_model.load_state_dict(load_checkpoint(base_name, self.device))
             base_diffusion = diffusion_from_config(DIFFUSION_CONFIGS[base_name])
 
+            # Load Upsampler
             up_model = model_from_config(MODEL_CONFIGS[upsampler_name], self.device)
             up_model.load_state_dict(load_checkpoint(upsampler_name, self.device))
             up_diffusion = diffusion_from_config(DIFFUSION_CONFIGS[upsampler_name])
@@ -65,68 +65,80 @@ class PointEGenerator:
             )
             self.available = True
             logger.info("Loaded Point-E models successfully on %s", self.device)
-        except Exception as exc:  # pragma: no cover - best effort init
-            logger.warning("Point-E unavailable (%s). Falling back to synthetic point clouds.", exc)
+        except Exception as exc:  # pragma: no cover
+            logger.warning("Point-E unavailable (%s). Using synthetic fallback.", exc)
             self.available = False
             self.sampler = None
+
+    def _get_crop_transform(self, image: np.ndarray, padding: int = 20) -> Tuple[np.ndarray, float, Tuple[float, float]]:
+        """Calculate crop centered on object and alignment parameters."""
+        h, w = image.shape[:2]
+        gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY) if image.ndim == 3 else image
+        coords = cv2.findNonZero(gray)
+        
+        if coords is None:
+            return image, 1.0, (0.0, 0.0)
+
+        x, y, bw, bh = cv2.boundingRect(coords)
+        
+        # Square crop logic
+        cx, cy = x + bw / 2, y + bh / 2
+        side = max(bw, bh) + padding * 2
+        x1 = int(max(0, cx - side / 2))
+        y1 = int(max(0, cy - side / 2))
+        x2 = int(min(w, x1 + side))
+        y2 = int(min(h, y1 + side))
+        
+        crop_w, crop_h = x2 - x1, y2 - y1
+        crop_img = image[y1:y2, x1:x2]
+        
+        scale = max(crop_w, crop_h) / max(w, h)
+        
+        # Offset from image center to crop center (normalized)
+        full_cx, full_cy = w / 2, h / 2
+        crop_cx, crop_cy = x1 + crop_w / 2, y1 + crop_h / 2
+        
+        off_x = (crop_cx - full_cx) / w
+        off_y = (crop_cy - full_cy) / h
+        
+        return crop_img, scale, (off_x, off_y)
 
     def _sample_once(self, image: np.ndarray, prompt: str, seed: int) -> np.ndarray:
         _set_seed(seed)
         if not self.available or self.sampler is None:
             return self._synthetic_point_cloud(seed)
 
-        try:
-            from PIL import Image
-        except ImportError as exc:  # pragma: no cover
-            logger.warning("Pillow missing; returning synthetic cloud (%s)", exc)
-            return self._synthetic_point_cloud(seed)
-
         pil_image = Image.fromarray(image.astype(np.uint8)).convert("RGB")
         pil_image = pil_image.resize((256, 256))
 
-        samples = None
         kwargs = dict(texts=[prompt], images=[pil_image])
-
+        samples = None
         try:
-            for sample in self.sampler.sample_batch_progressive(batch_size=1, model_kwargs=kwargs):
-                samples = sample
+            for s in self.sampler.sample_batch_progressive(batch_size=1, model_kwargs=kwargs):
+                samples = s
         except Exception as exc:
-            # If image conditioning fails (shape/dtype issues), fall back to text-only
-            logger.warning("Point-E image conditioning failed (%s); retrying without images.", exc)
+            logger.warning("Image conditioning failed (%s), retrying text-only.", exc)
             kwargs = dict(texts=[prompt])
-            for sample in self.sampler.sample_batch_progressive(batch_size=1, model_kwargs=kwargs):
-                samples = sample
+            for s in self.sampler.sample_batch_progressive(batch_size=1, model_kwargs=kwargs):
+                samples = s
 
         if samples is None:
-            logger.warning("Point-E sampling returned no samples; using synthetic cloud.")
             return self._synthetic_point_cloud(seed)
 
-        pcs = self.sampler.output_to_point_clouds(samples)
-        pc0 = pcs[0]
-
-        # Support both Point-E PointCloud objects and raw numpy / torch tensors.
-        if hasattr(pc0, "coords"):
-            pts = pc0.coords
-        else:
-            pts = pc0
-
+        pc = self.sampler.output_to_point_clouds(samples)[0]
+        pts = pc.coords if hasattr(pc, "coords") else pc
         if hasattr(pts, "detach"):
             pts = pts.detach().cpu().numpy()
-        else:
-            pts = np.asarray(pts)
-
-        return pts.astype(np.float32)
+        
+        return np.asarray(pts, dtype=np.float32)
 
     def _synthetic_point_cloud(self, seed: int) -> np.ndarray:
-        """Generate a structured synthetic cloud (filled cylinder) for debugging."""
         _set_seed(seed)
         num = self.cfg.num_points
         theta = np.random.rand(num) * 2 * np.pi
         z = np.random.rand(num) * 0.2 + 0.05
         r = 0.1 + 0.02 * np.random.randn(num)
-        x = r * np.cos(theta)
-        y = r * np.sin(theta)
-        return np.stack([x, y, z], axis=1).astype(np.float32)
+        return np.stack([r * np.cos(theta), r * np.sin(theta), z], axis=1).astype(np.float32)
 
     def generate_point_clouds_from_image(
         self,
@@ -135,12 +147,24 @@ class PointEGenerator:
         num_seeds: Optional[int] = None,
         seed_list: Optional[List[int]] = None,
     ) -> List[np.ndarray]:
-        """Generate a list of point clouds conditioned on an RGB image."""
+        """Generate point clouds with auto-cropping and spatial realignment."""
         prompt = prompt or self.cfg.prompt
         num = num_seeds or self.cfg.num_seeds
         seeds = seed_list or self.cfg.seed_list or list(range(num))
+        
+        crop_img, scale, (off_x, off_y) = self._get_crop_transform(image)
+        
         clouds: List[np.ndarray] = []
         for i in range(num):
             seed = seeds[i] if i < len(seeds) else seeds[-1] + i + 1
-            clouds.append(self._sample_once(image, prompt, seed))
+            
+            raw_pts = self._sample_once(crop_img, prompt, seed)
+            
+            # Re-align to World/Full-Image Frame
+            pts = raw_pts * scale
+            pts[:, 0] += off_x
+            pts[:, 1] -= off_y 
+            
+            clouds.append(pts)
+            
         return clouds

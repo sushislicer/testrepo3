@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import os
+# CRITICAL FIX: Set headless rendering backend before importing visualization libs
+# This prevents Open3D/GLFW from trying to open a window and timing out.
+os.environ["PYOPENGL_PLATFORM"] = "egl"
+
 import argparse
 import sys
 from collections import defaultdict
@@ -63,6 +68,10 @@ def main() -> None:
                 
                 cfg.experiment.output_dir = str(output_root / mesh_name)
                 cfg.experiment.trajectory_name = f"{policy}_t{trial}"
+                
+                # Explicitly disable heavy 3D visualization for batch runs if supported
+                if hasattr(cfg.experiment, "visualize"):
+                    cfg.experiment.visualize = False 
 
                 runner = ActiveHallucinationRunner(cfg)
                 try:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Tuple
 
 import cv2
 import numpy as np
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 class CLIPSegSegmenter:
-    """Wrapper for CLIPSeg segmentation with lazy model loading."""
+    """Wrapper for CLIPSeg segmentation with lazy model loading and auto-cropping."""
 
     def __init__(self, cfg: SegmentationConfig):
         self.cfg = cfg
@@ -40,58 +40,96 @@ class CLIPSegSegmenter:
             self.model = None
             self.processor = None
 
+    def _get_auto_crop_box(self, image: np.ndarray, padding: int = 20) -> Optional[Tuple[int, int, int, int]]:
+        """
+        Detect object bounding box to focus CLIPSeg.
+        Returns (x_min, y_min, x_max, y_max) or None if empty.
+        """
+        # Convert to grayscale if needed for thresholding
+        if image.ndim == 3:
+            gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+        else:
+            gray = image
+
+        # Assuming object is non-black against black background (or invert if white bg)
+        # Using a low threshold to catch dark objects.
+        coords = cv2.findNonZero(gray)
+        if coords is None:
+            return None
+
+        x, y, w, h = cv2.boundingRect(coords)
+        
+        # Add padding
+        img_h, img_w = image.shape[:2]
+        x_min = max(0, x - padding)
+        y_min = max(0, y - padding)
+        x_max = min(img_w, x + w + padding)
+        y_max = min(img_h, y + h + padding)
+
+        # Make square for better CLIPSeg/Point-E consistency
+        crop_w = x_max - x_min
+        crop_h = y_max - y_min
+        diff = crop_w - crop_h
+        if diff > 0: # Wider than tall
+            pad_v = diff // 2
+            y_min = max(0, y_min - pad_v)
+            y_max = min(img_h, y_max + pad_v)
+        elif diff < 0: # Taller than wide
+            pad_h = abs(diff) // 2
+            x_min = max(0, x_min - pad_h)
+            x_max = min(img_w, x_max + pad_h)
+
+        return (x_min, y_min, x_max, y_max)
+
     def segment_affordance(self, image: np.ndarray, prompt: Optional[str] = None) -> np.ndarray:
-        """Return a float mask in [0,1] with same HxW as input image."""
+        """
+        Return a float mask in [0,1] with same HxW as input image.
+        Performs auto-cropping to improve resolution on small objects.
+        """
         if not self.available or self.model is None or self.processor is None:
             return np.zeros((image.shape[0], image.shape[1]), dtype=np.float32)
+
         prompt = prompt or self.cfg.prompt
+        full_h, full_w = image.shape[:2]
+        
+        # 1. Determine Crop
+        crop_box = self._get_auto_crop_box(image)
+        if crop_box:
+            x1, y1, x2, y2 = crop_box
+            input_image = image[y1:y2, x1:x2]
+        else:
+            x1, y1, x2, y2 = 0, 0, full_w, full_h
+            input_image = image
+
+        # 2. Run Inference on (Cropped) Image
         inputs = self.processor(
             text=[prompt],
-            images=[image],
+            images=[input_image],
             return_tensors="pt",
         ).to(self.device)
+
         with torch.no_grad():
             outputs = self.model(**inputs)
-            logits = outputs.logits  # expected [B, 1, H, W]
+            logits = outputs.logits
             probs = torch.sigmoid(logits)
-            expected_hw = logits.shape[-2:] if logits.dim() >= 2 else None
 
-        # Reduce to a single 2D mask robustly across possible tensor shapes.
-        if probs.dim() == 4:           # [B,1,H,W] or [B,C,H,W]
-            probs = probs[0, 0]
-        elif probs.dim() == 3:         # [B,H,W] or [C,H,W]
-            probs = probs[0]
-        elif probs.dim() == 2:         # [H,W] already fine
-            pass
-        else:                          # anything else is unexpected
-            logger.warning("Segmentation mask logits have unexpected dims %s; returning zeros.", list(probs.shape))
-            return np.zeros((image.shape[0], image.shape[1]), dtype=np.float32)
+        # Handle dimensions
+        if probs.dim() == 4: probs = probs[0, 0]
+        elif probs.dim() == 3: probs = probs[0]
+        
+        mask_crop = probs.detach().cpu().numpy().astype(np.float32)
+        
+        # 3. Resize mask to match the Crop Size
+        crop_h, crop_w = (y2 - y1), (x2 - x1)
+        if mask_crop.shape != (crop_h, crop_w):
+             mask_crop = cv2.resize(mask_crop, (crop_w, crop_h), interpolation=cv2.INTER_LINEAR)
 
-        mask = probs.detach().cpu().numpy().astype(np.float32)
+        # 4. Paste back into Full Size Frame ("Un-crop")
+        # This ensures the mask aligns with global camera intrinsics
+        full_mask = np.zeros((full_h, full_w), dtype=np.float32)
+        full_mask[y1:y2, x1:x2] = mask_crop
 
-        # Normalize mask shape to 2D and match the rendered image resolution.
-        mask = np.squeeze(mask)
-        if mask.ndim == 1 and expected_hw is not None:
-            h_exp, w_exp = int(expected_hw[0]), int(expected_hw[1])
-            if h_exp * w_exp == mask.size:
-                mask = mask.reshape(h_exp, w_exp)
-        if mask.ndim == 1:
-            # If still flat, try square reshape as last resort.
-            side = int(np.sqrt(mask.size))
-            if side * side == mask.size:
-                mask = mask.reshape(side, side)
-        if mask.ndim == 3:
-            mask = mask.mean(axis=-1)
-        if mask.ndim != 2:
-            logger.warning("Segmentation mask has unexpected shape %s; returning zeros.", mask.shape)
-            return np.zeros((image.shape[0], image.shape[1]), dtype=np.float32)
-        if mask.shape != image.shape[:2]:
-            try:
-                mask = cv2.resize(mask, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_LINEAR)
-            except Exception as exc:  # pragma: no cover - best effort resize
-                logger.warning("Failed to resize mask from %s to %s (%s). Using zeros.", mask.shape, image.shape[:2], exc)
-                mask = np.zeros((image.shape[0], image.shape[1]), dtype=np.float32)
-        return mask
+        return full_mask
 
 
 def project_points_to_pixels(
@@ -120,6 +158,8 @@ def compute_point_mask_weights(
     mask = np.asarray(mask)
     if mask.ndim == 3:
         mask = mask.mean(axis=-1)
+    
+    # Validation
     if mask.ndim != 2:
         logger.warning("Point mask weights received invalid mask shape %s; returning zeros.", mask.shape)
         return np.zeros(points_world.shape[0], dtype=np.float32)
@@ -128,8 +168,10 @@ def compute_point_mask_weights(
     u = pix[:, 0].round().astype(int)
     v = pix[:, 1].round().astype(int)
     depth = pix[:, 2]
+    
     h, w = mask.shape
     valid = (u >= 0) & (u < w) & (v >= 0) & (v < h) & (depth > 0)
+    
     weights = np.zeros(points_world.shape[0], dtype=np.float32)
     weights[valid] = mask[v[valid], u[valid]]
     return weights
@@ -141,30 +183,16 @@ def compute_combined_score(
 ) -> np.ndarray:
     """
     Compute the final voxel score by combining variance and semantic weights.
-
-    Implements Requirement 6.3 (Combined semantic variance score).
-    
     Formula: Score(v) = Variance(v) * SemanticWeight(v)
-    Result is normalized to [0, 1].
-
-    Args:
-        variance_grid: (N,) float array of geometric variance/uncertainty.
-        semantic_weights: (N,) float array of semantic relevance (from CLIPSeg).
-
-    Returns:
-        normalized_scores: (N,) float array in range [0, 1].
     """
-    # 1. Compute raw score
     raw_scores = variance_grid * semantic_weights
     
-    # 2. Normalize scores to [0, 1]
+    # Normalize scores to [0, 1] for easier visualization/thresholding
     min_val = np.min(raw_scores)
     max_val = np.max(raw_scores)
     
     if max_val - min_val < 1e-6:
-        # Avoid division by zero if all scores are identical
         return np.zeros_like(raw_scores)
         
     normalized_scores = (raw_scores - min_val) / (max_val - min_val)
-    
     return normalized_scores
