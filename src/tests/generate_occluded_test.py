@@ -1,20 +1,25 @@
-"""Generates a partially occluded mug mesh. Renders image if possible."""
+"""
+Generates a partially occluded mug mesh.
+Fallback: Uses Matplotlib to render a 'sketch' if Pyrender fails.
+"""
 
 from __future__ import annotations
 
-import sys
 import os
+# Force EGL for Colab before imports
+os.environ["PYOPENGL_PLATFORM"] = "egl"
+
+import sys
 import numpy as np
 import trimesh
 import imageio
+import matplotlib.pyplot as plt
 from pathlib import Path
 
 CURRENT_SCRIPT_PATH = Path(__file__).resolve()
 PROJECT_ROOT = CURRENT_SCRIPT_PATH.parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
-
-# Note: We do NOT import simulator here to avoid early crashes on machines without EGL.
 
 ASSETS_DIR = PROJECT_ROOT / "assets"
 MESH_OUT = ASSETS_DIR / "meshes" / "example.obj"
@@ -38,23 +43,39 @@ def create_partial_mug() -> trimesh.Trimesh:
     return mesh
 
 
+def render_fallback_matplotlib(mesh: trimesh.Trimesh, out_path: Path):
+    """Renders a simple point cloud sketch if Pyrender fails."""
+    print("  [Fallback] Rendering mesh sketch via Matplotlib...")
+    
+    points = mesh.sample(5000)
+    x = points[:, 0]
+    y = points[:, 1] # Front view projection
+    
+    plt.figure(figsize=(5, 5))
+    plt.scatter(x, y, c='black', s=1)
+    plt.axis('equal')
+    plt.axis('off')
+    plt.tight_layout(pad=0)
+    
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(out_path, dpi=100)
+    plt.close()
+    print(f"  [Fallback] Saved sketch to {out_path}")
+
+
 def main():
     MESH_OUT.parent.mkdir(parents=True, exist_ok=True)
     IMAGE_OUT.parent.mkdir(parents=True, exist_ok=True)
 
-    # 1. Generate Mesh (Always works)
     print("Generating mesh...")
     mesh = create_partial_mug()
     mesh.export(MESH_OUT)
     print(f"Saved mesh: {MESH_OUT}")
 
-    # 2. Attempt Rendering (Might fail on some systems)
     print("Attempting to render view...")
+    render_success = False
+    
     try:
-        # Enable EGL if headless linux
-        if sys.platform == "linux" and not os.environ.get("DISPLAY"):
-            os.environ["PYOPENGL_PLATFORM"] = "egl"
-
         from src.config import ActiveHallucinationConfig
         from src.simulator import VirtualTabletopSimulator
 
@@ -67,11 +88,14 @@ def main():
         sim = VirtualTabletopSimulator(cfg.simulator)
         rgb, _ = sim.render_view(idx=0)
         imageio.imwrite(IMAGE_OUT, rgb.astype(np.uint8))
-        print(f"Saved image: {IMAGE_OUT}")
+        print(f"Saved HQ image: {IMAGE_OUT}")
+        render_success = True
 
     except Exception as e:
-        print(f"[Warning] Rendering skipped: {e}")
-        print("Mesh was saved successfully. You can proceed with experiments using the mesh.")
+        print(f"[Warning] Pyrender failed ({e}). Using fallback.")
+        
+    if not render_success:
+        render_fallback_matplotlib(mesh, IMAGE_OUT)
 
 
 if __name__ == "__main__":
