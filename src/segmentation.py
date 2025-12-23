@@ -1,10 +1,18 @@
-"""CLIPSeg affordance masking and 2D-to-3D projection utilities."""
+"""CLIPSeg affordance masking utilities.
+
+This module supports two related operations:
+
+1) 2D affordance segmentation via CLIPSeg.
+2) 3D-to-2D projection helpers that let us "paint" a Point-E point cloud by
+   rendering it into 2D views, running CLIPSeg on those renders, and projecting
+   the resulting masks back onto 3D points.
+"""
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
-from typing import Optional, Tuple
+import math
+from typing import Iterable, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -132,6 +140,20 @@ class CLIPSegSegmenter:
         return full_mask
 
 
+def _rotation_z(deg: float) -> np.ndarray:
+    """3x3 rotation matrix around +Z (degrees)."""
+    rad = math.radians(deg)
+    c, s = math.cos(rad), math.sin(rad)
+    return np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]], dtype=np.float32)
+
+
+def rotate_cam_to_world_yaw(cam_to_world: np.ndarray, yaw_deg: float) -> np.ndarray:
+    """Rotate a camera pose around the world Z axis (about the origin)."""
+    rot = np.eye(4, dtype=np.float32)
+    rot[:3, :3] = _rotation_z(yaw_deg)
+    return rot @ cam_to_world
+
+
 def project_points_to_pixels(
     points_world: np.ndarray,
     cam_to_world: np.ndarray,
@@ -141,11 +163,17 @@ def project_points_to_pixels(
     world_to_cam = np.linalg.inv(cam_to_world)
     homog = np.concatenate([points_world, np.ones((points_world.shape[0], 1), dtype=np.float32)], axis=1)
     cam = (world_to_cam @ homog.T).T[:, :3]
-    z = cam[:, 2:3]
-    z_safe = np.clip(z, 1e-6, None)
-    u = intrinsics.fx * cam[:, 0] / z_safe[:, 0] + intrinsics.cx
-    v = intrinsics.fy * cam[:, 1] / z_safe[:, 0] + intrinsics.cy
-    return np.stack([u, v, cam[:, 2]], axis=1)  # (u, v, depth)
+
+    # Camera convention: poses come from pyrender/OpenGL where the camera looks down -Z.
+    # That means points "in front" have cam_z < 0. Use depth = -cam_z for positive depth.
+    depth = (-cam[:, 2]).astype(np.float32)
+    depth_safe = np.clip(depth, 1e-6, None)
+
+    u = intrinsics.fx * cam[:, 0] / depth_safe + intrinsics.cx
+    # cam_y is up, but image v increases downwards -> flip sign.
+    v = -intrinsics.fy * cam[:, 1] / depth_safe + intrinsics.cy
+
+    return np.stack([u, v, depth], axis=1)  # (u, v, depth>0 in front)
 
 
 def compute_point_mask_weights(
@@ -175,6 +203,130 @@ def compute_point_mask_weights(
     weights = np.zeros(points_world.shape[0], dtype=np.float32)
     weights[valid] = mask[v[valid], u[valid]]
     return weights
+
+
+def render_point_cloud_view(
+    points_world: np.ndarray,
+    cam_to_world: np.ndarray,
+    intrinsics,
+    *,
+    background: int = 0,
+    point_radius_px: int = 2,
+    blur_sigma: float = 0.8,
+) -> np.ndarray:
+    """
+    Lightweight, dependency-free point cloud renderer.
+
+    Produces a 3-channel uint8 image suitable as input to CLIPSeg by:
+    - projecting points to pixels
+    - z-buffering with a per-pixel min depth
+    - mapping depth to intensity (closer -> brighter)
+    - optionally dilating + blurring to reduce sparsity
+    """
+    h = int(getattr(intrinsics, "height", 512))
+    w = int(getattr(intrinsics, "width", 512))
+
+    if points_world.size == 0:
+        return np.full((h, w, 3), background, dtype=np.uint8)
+
+    pix = project_points_to_pixels(points_world, cam_to_world, intrinsics)
+    u = pix[:, 0].round().astype(np.int32)
+    v = pix[:, 1].round().astype(np.int32)
+    depth = pix[:, 2]
+
+    valid = (u >= 0) & (u < w) & (v >= 0) & (v < h) & (depth > 0)
+    if not np.any(valid):
+        return np.full((h, w, 3), background, dtype=np.uint8)
+
+    u = u[valid]
+    v = v[valid]
+    depth = depth[valid].astype(np.float32)
+
+    depth_map = np.full((h, w), np.inf, dtype=np.float32)
+    np.minimum.at(depth_map, (v, u), depth)
+
+    occ = np.isfinite(depth_map)
+    img = np.zeros((h, w), dtype=np.float32)
+    if np.any(occ):
+        d = depth_map[occ]
+        d_min = float(d.min())
+        d_max = float(d.max())
+        denom = (d_max - d_min) if (d_max - d_min) > 1e-6 else 1e-6
+        # Closer -> brighter
+        img[occ] = (d_max - depth_map[occ]) / denom
+
+    img_u8 = (np.clip(img, 0.0, 1.0) * 255.0).astype(np.uint8)
+
+    if point_radius_px > 0:
+        k = 2 * int(point_radius_px) + 1
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+        img_u8 = cv2.dilate(img_u8, kernel, iterations=1)
+
+    if blur_sigma and blur_sigma > 0:
+        img_u8 = cv2.GaussianBlur(img_u8, ksize=(0, 0), sigmaX=float(blur_sigma))
+
+    if background != 0:
+        bg = np.uint8(int(background))
+        img_u8 = np.where(img_u8 > 0, img_u8, bg).astype(np.uint8)
+
+    return np.repeat(img_u8[..., None], 3, axis=2)
+
+
+def compute_point_mask_weights_multiview(
+    points_world: np.ndarray,
+    base_cam_to_world: np.ndarray,
+    intrinsics,
+    segmenter,
+    *,
+    prompt: Optional[str] = None,
+    num_views: int = 3,
+    yaw_step_deg: Optional[float] = None,
+    aggregation: str = "max",
+    point_radius_px: int = 2,
+    blur_sigma: float = 0.8,
+) -> np.ndarray:
+    """
+    Compute per-point semantic weights by rendering `num_views` around the cloud,
+    running CLIPSeg per-render, and projecting the 2D masks back to 3D points.
+
+    `base_cam_to_world` is used for the first view (intended to match the input view).
+    Additional views rotate the camera around world Z by `yaw_step_deg`.
+    """
+    if num_views < 1:
+        raise ValueError("num_views must be >= 1")
+
+    if yaw_step_deg is None:
+        yaw_step_deg = 360.0 / float(num_views)
+
+    weights_per_view = []
+    for i in range(num_views):
+        yaw = float(i) * float(yaw_step_deg)
+        cam_to_world = rotate_cam_to_world_yaw(base_cam_to_world, yaw)
+
+        render = render_point_cloud_view(
+            points_world,
+            cam_to_world,
+            intrinsics,
+            point_radius_px=point_radius_px,
+            blur_sigma=blur_sigma,
+        )
+        mask = segmenter.segment_affordance(render, prompt=prompt)
+        weights = compute_point_mask_weights(points_world, cam_to_world, intrinsics, mask)
+        weights_per_view.append(weights)
+
+    if not weights_per_view:
+        return np.zeros(points_world.shape[0], dtype=np.float32)
+
+    stack = np.stack(weights_per_view, axis=0)
+
+    aggregation = aggregation.lower().strip()
+    if aggregation == "max":
+        return np.max(stack, axis=0)
+    if aggregation == "mean":
+        return np.mean(stack, axis=0)
+    if aggregation == "sum":
+        return np.sum(stack, axis=0)
+    raise ValueError(f"Unknown aggregation '{aggregation}' (expected: max|mean|sum)")
 
 
 def compute_combined_score(

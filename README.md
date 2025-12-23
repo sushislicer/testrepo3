@@ -1,6 +1,6 @@
 # Active-Hallucination
 
-Simulation-only pipeline that leverages generative variance (Point-E) plus CLIPSeg semantic masking to drive Next-Best-View selection for revealing object affordances (e.g., handles) in tabletop scenes.
+Simulation-only pipeline that leverages generative variance (Point-E) plus CLIPSeg-based semantic *painting* of each Point‑E hypothesis (via multiview point-cloud renders) to drive Next-Best-View selection for revealing object affordances (e.g., handles) in tabletop scenes.
 
 ## Quickstart
 
@@ -24,7 +24,7 @@ python -m src.scripts.demo_orbital_camera --mesh assets/meshes/example.obj
   - `simulator.py`: pyrender-based tabletop camera + renderer.
   - `pointe_wrapper.py`: Point-E multi-seed generation helper with graceful fallbacks.
   - `variance_field.py`: voxel grid + variance/semantic score computation.
-  - `segmentation.py`: CLIPSeg affordance masking.
+  - `segmentation.py`: CLIPSeg semantic masking + multiview 3D painting helpers.
   - `nbv_policy.py`: Active-Hallucination NBV + baselines.
   - `experiments.py`: end-to-end loops, metrics, logging.
   - `visualization.py`: overlays, variance heatmaps, trajectory grids.
@@ -50,17 +50,17 @@ All entrypoints live under `src/scripts/` and can be run via `python -m src.scri
   - How it works: loads the image with PIL, calls `PointEGenerator.generate_point_clouds_from_image(...)` to produce multiple point clouds (one per seed), saves them as `.npy`, and optionally visualizes them with `overlay_point_clouds_open3d`.
   - Example: `python -m src.scripts.demo_pointe_multiseed --image path/to/image.png --num_seeds 8 --view`
 
-- `demo_variance_field`: compute a voxelized variance field from Point-E multi-seed outputs, optionally weighted by a CLIPSeg affordance mask.
+- `demo_variance_field`: compute a voxelized variance field from Point-E multi-seed outputs, optionally weighted by CLIPSeg semantic painting on each Point‑E generation (3 rendered views per generation).
   - Inputs: `--image <path>`, optional `--prompt <text>`, `--use_mask`, `--save_dir <dir>`
   - Outputs: `variance_projection.png` (max-projection) and `variance_points.npy` (thresholded 3D score points) under `--save_dir` (default `outputs/demo_variance`)
-  - Notes: `--use_mask` runs CLIPSeg and uses the mask to reweight points before combining with variance.
-  - How it works: (1) generates multi-seed Point-E point clouds from the input image, (2) voxelizes them into a grid and computes per-voxel variance (`compute_variance_field`), (3) optionally runs CLIPSeg to get a 2D affordance mask and accumulates per-voxel semantic weights (`accumulate_semantic_weights`), then (4) combines variance+semantics (`combine_variance_and_semantics`) and exports a 2D max-projection plus thresholded 3D score points.
+  - Notes: `--use_mask` renders each Point‑E point cloud from multiple viewpoints (default: 3 views at 120° apart), runs CLIPSeg on those renders, and projects the resulting masks back to 3D points to produce semantic weights.
+  - How it works: (1) generates multi-seed Point-E point clouds from the input image, (2) voxelizes them into a grid and computes per-voxel variance (`compute_variance_field`), (3) optionally performs multiview CLIPSeg semantic painting per generation and accumulates per-voxel semantic weights (`accumulate_semantic_weights`), then (4) combines variance+semantics (`combine_variance_and_semantics`) and exports a 2D max-projection plus thresholded 3D score points.
   - Example: `python -m src.scripts.demo_variance_field --image path/to/image.png --use_mask`
 
 - `run_single_object_demo`: run one complete Active-Hallucination “episode” (NBV loop) for a single mesh and log results.
   - Inputs: `--mesh <path>`, optional `--config <yaml>`, `--policy active|random|geometric`, `--steps <N>`, `--initial_view <idx>`, `--output <dir>`
   - Outputs: per-step renders/figures/logs under `cfg.experiment.output_dir/cfg.experiment.trajectory_name` (defaults are set in `src/config.py`)
-  - How it works: loads a base config (optionally from YAML), applies CLI overrides, then runs `ActiveHallucinationRunner.run_episode(...)` which iterates for `num_steps`: render a view, run Point-E multi-seed generation, compute the variance(+mask) score volume, select the next view using the chosen policy, and log artifacts to the trajectory folder.
+  - How it works: loads a base config (optionally from YAML), applies CLI overrides, then runs `ActiveHallucinationRunner.run_episode(...)` which iterates for `num_steps`: render a view, run Point-E multi-seed generation, multiview-render each Point‑E generation and run CLIPSeg to paint affordance weights in 3D, compute the variance×semantic score volume, select the next view using the chosen policy, and log artifacts to the trajectory folder.
   - Example: `python -m src.scripts.run_single_object_demo --mesh assets/meshes/example.obj --policy active --steps 8`
 
 - `run_experiments`: batch runner over many meshes and policies (useful for quick comparisons).

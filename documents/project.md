@@ -58,12 +58,15 @@ We must convert these $K$ point clouds into a single metric of uncertainty.
     *   $\sigma^2 \approx 0$: High confidence (either definitely empty or definitely occupied).
     *   $\sigma^2 > \text{Threshold}$: High Hallucination (the model is guessing).
 
-### Module C: Semantic Masking (The "Intent")
+### Module C: Semantic Painting (The "Intent")
 High variance isn't enough—the model might hallucinate the floor or background. We only care about the **Affordance** (e.g., the Handle).
 
-1.  **2D Segmentation:** We run **CLIPSeg** or **GroundingDINO** on the input image $I_{rgb}$ with the prompt "Handle". This gives us a 2D mask $M$.
-2.  **3D Projection:** We project this mask into the voxel grid.
-3.  **Targeted Uncertainty:** We filter the Variance Field to only consider voxels that are semantically relevant (or neighbors of relevant voxels).
+Instead of segmenting the *input view* (which can miss occluded affordances), we segment the *generated 3D hypotheses*:
+
+1.  **Multiview renders per hypothesis:** For each Point‑E point cloud $P_i$, we render **3 views** around the object: the input-camera view plus two additional views at +120° and +240° yaw.
+2.  **2D Segmentation:** Run **CLIPSeg** on each render with the prompt "Handle" to obtain masks $M_i^0, M_i^1, M_i^2$.
+3.  **Project masks back to 3D:** Project points of $P_i$ into each view to sample mask values and obtain a per-point (and then per-voxel) semantic weight. Aggregate across the 3 views (e.g., `max`) to get $\text{SemanticWeight}_i(v)$.
+4.  **Targeted Uncertainty:** Filter the variance field by the semantic weights:
     $$ \text{Score}(v) = \sigma^2(v) \times \text{SemanticWeight}(v) $$
 
 ### Module D: Active View Selection (The Control, in Simulation)
@@ -73,7 +76,7 @@ High variance isn't enough—the model might hallucinate the floor or background
 4.  **Loop:** Render a new view. If variance drops below a threshold $\tau$, we mark the handle as sufficiently observed and trigger a (simulated) grasp success; otherwise, we repeat.
 
 ### Simulation Platform: Python Virtual Camera
-We implement the simulated tabletop environment and camera entirely in Python using lightweight 3D libraries (e.g., **trimesh** + **pyrender**, optionally **Open3D** for debugging). These tools allow us to: (1) load mesh models of objects, (2) place them on a virtual table, (3) define camera intrinsics and extrinsics, and (4) render RGB images offscreen from arbitrary viewpoints. Our NBV module outputs target camera poses on a discrete orbital ring; the Python renderer then produces the corresponding "robot view" image that is fed back into Point-E and CLIPSeg. No external robotics simulator or GUI is required—everything runs as a pure Python codebase.
+We implement the simulated tabletop environment and camera entirely in Python using lightweight 3D libraries (e.g., **trimesh** + **pyrender**, optionally **Open3D** for debugging). These tools allow us to: (1) load mesh models of objects, (2) place them on a virtual table, (3) define camera intrinsics and extrinsics, and (4) render RGB images offscreen from arbitrary viewpoints. Our NBV module outputs target camera poses on a discrete orbital ring; the renderer produces the corresponding "robot view" image that is fed to Point‑E. After Point‑E produces 3D hypotheses, we render each hypothesis from a small set of additional viewpoints and run CLIPSeg on those renders to obtain 3D semantic weights. No external robotics simulator or GUI is required—everything runs as a pure Python codebase.
 
 ---
 
@@ -95,7 +98,7 @@ We implement the simulated tabletop environment and camera entirely in Python us
 ### Week 3: Semantic Layer & Logic
 *   **Goal:** Integrate CLIPSeg and the Control Logic.
 *   **Task:**
-    1.  Run CLIPSeg on the input image.
+    1.  Render each Point‑E generation from 3 viewpoints (input + 120° + 240°) and run CLIPSeg on those renders.
     2.  Mask the variance cloud.
     3.  Compute the centroid of the remaining "red" points.
     4.  Output a text command: "Recommended Action: Move Camera [Left/Right/Up] by X degrees."

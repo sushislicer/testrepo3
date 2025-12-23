@@ -1,4 +1,9 @@
-"""Compute and visualize the variance field for a single RGB input."""
+"""Compute and visualize the semantic variance field for a single RGB input.
+
+If `--use_mask` is enabled, this performs CLIPSeg semantic painting on each Point‑E
+generation by rendering it from multiple viewpoints (default: 3 views at 120° apart),
+then projecting the masks back onto the 3D points.
+"""
 
 from __future__ import annotations
 
@@ -18,7 +23,7 @@ DEFAULT_IMAGE_DIR = PROJECT_ROOT / "assets" / "images"
 
 from src.config import ActiveHallucinationConfig
 from src.pointe_wrapper import PointEGenerator
-from src.segmentation import CLIPSegSegmenter, compute_point_mask_weights
+from src.segmentation import CLIPSegSegmenter, compute_point_mask_weights_multiview
 from src.variance_field import (
     VoxelGrid,
     compute_variance_field,
@@ -27,7 +32,7 @@ from src.variance_field import (
     export_score_points,
 )
 from src.visualization import save_variance_max_projection
-from src.simulator import pose_to_matrix
+from src.simulator import generate_orbital_poses, pose_to_matrix
 
 try:
     import open3d as o3d
@@ -40,7 +45,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--image", type=str, required=True, help="Path to RGB image or filename.")
     parser.add_argument("--prompt", type=str, default=None, help="Text prompt for Point-E.")
     parser.add_argument("--save_dir", type=str, default="outputs/demo_variance", help="Output directory.")
-    parser.add_argument("--use_mask", action="store_true", help="Apply CLIPSeg semantic weighting.")
+    parser.add_argument(
+        "--use_mask",
+        action="store_true",
+        help="Run CLIPSeg on multiview renders of each Point‑E generation and project masks back to 3D.",
+    )
     parser.add_argument("--view", action="store_true", help="Attempt interactive 3D visualization.")
     return parser.parse_args()
 
@@ -105,16 +114,24 @@ def main() -> None:
 
     semantic_grid = np.ones_like(variance)
     if args.use_mask:
-        mask = seg.segment_affordance(img, cfg.segmentation.prompt)
-        identity_pose = np.eye(4, dtype=np.float32)
-        try:
-            point_weights = [
-                compute_point_mask_weights(pc, identity_pose, cfg.simulator.intrinsics, mask) 
-                for pc in clouds
-            ]
-            semantic_grid = accumulate_semantic_weights(clouds, point_weights, cfg.variance)
-        except Exception:
-            pass
+        base_pose = generate_orbital_poses(1, cfg.simulator.radius, cfg.simulator.elevation_deg)[0]
+        base_cam_to_world = pose_to_matrix(base_pose)
+        point_weights = [
+            compute_point_mask_weights_multiview(
+                pc,
+                base_cam_to_world,
+                cfg.simulator.intrinsics,
+                seg,
+                prompt=cfg.segmentation.prompt,
+                num_views=cfg.segmentation.views_per_cloud,
+                yaw_step_deg=cfg.segmentation.yaw_step_deg,
+                aggregation=cfg.segmentation.aggregation,
+                point_radius_px=cfg.segmentation.render_point_radius_px,
+                blur_sigma=cfg.segmentation.render_blur_sigma,
+            )
+            for pc in clouds
+        ]
+        semantic_grid = accumulate_semantic_weights(clouds, point_weights, cfg.variance)
 
     score = combine_variance_and_semantics(variance, semantic_grid)
     out_dir = Path(args.save_dir)

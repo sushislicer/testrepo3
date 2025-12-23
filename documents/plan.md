@@ -6,13 +6,13 @@ This document turns the high-level proposal in `documents/project.md` into a con
 
 ## 0. Goals, Scope, and Constraints
 
-- **Goal:** Implement and evaluate Active-Hallucination, a simulation-only pipeline that uses generative variance from Point-E plus semantic masking to drive a Next-Best-View (NBV) policy for revealing object affordances (e.g., handles).
+- **Goal:** Implement and evaluate Active-Hallucination, a simulation-only pipeline that uses generative variance from Point-E plus CLIPSeg-based semantic *painting* (per Point‑E hypothesis via multiview renders) to drive a Next-Best-View (NBV) policy for revealing object affordances (e.g., handles).
 - **Scope:** Pure Python codebase; no physical robots or real sensors. Virtual tabletop scenes, orbital camera ring, RGB rendering, and evaluation all run in software.
 - **Core components:**
   - Python virtual camera simulator (`trimesh` + `pyrender` / `open3d`).
   - Point-E (image-to-point-cloud) integration with multi-seed sampling.
   - Semantic Variance Field (voxelized uncertainty metric).
-  - CLIPSeg-based 2D semantic masking and 3D projection.
+  - CLIPSeg-based semantic painting of Point‑E hypotheses via multiview renders.
   - NBV policy over a discrete set of camera poses, plus baselines (Random, Geometric NBV).
   - Experimental harness, metrics, visualizations, and report-ready figures.
 - **Key deadlines (from requirements):**
@@ -47,7 +47,7 @@ This document turns the high-level proposal in `documents/project.md` into a con
     - `simulator.py` – Virtual tabletop + camera rendering.
     - `pointe_wrapper.py` – Point-E loading and multi-seed sampling utilities.
     - `variance_field.py` – Voxel grid + Semantic Variance computation.
-    - `segmentation.py` – CLIPSeg integration and mask projection.
+    - `segmentation.py` – CLIPSeg integration + multiview 3D painting helpers.
     - `nbv_policy.py` – NBV policy + baselines.
     - `experiments.py` – High-level experiment loops and logging.
     - `visualization.py` – Plotting and figure generation utilities.
@@ -194,7 +194,7 @@ This document turns the high-level proposal in `documents/project.md` into a con
 
 ---
 
-## 6. CLIPSeg Integration and Semantic Masking
+## 6. CLIPSeg Integration and Semantic Painting
 
 **6.1. 2D CLIPSeg pipeline**
 
@@ -203,15 +203,18 @@ This document turns the high-level proposal in `documents/project.md` into a con
   - `segment_affordance(image: np.ndarray, text_prompt: str) -> mask: np.ndarray`.
 - The mask should be a binary or float array with the same resolution as the input image (e.g., 512×512), indicating probability of the affordance (e.g., “handle”).
 
-**6.2. Projection from 2D mask to 3D voxels**
+**6.2. Multiview painting: render → CLIPSeg → project back to 3D**
 
-- For each point in each Point-E cloud, project it into the image plane using the known camera intrinsics/extrinsics from the simulator:
-  - Compute pixel coordinates for each 3D point.
-  - Look up the mask value at those pixel coordinates.
-- Define a semantic weight for each voxel:
-  - E.g., average the mask values of points that fall into that voxel.
-- Implement in `variance_field.py` or `segmentation.py`:
-  - `compute_semantic_weights(point_clouds, camera_pose, intrinsics, mask) -> semantic_weight_grid`.
+- Goal: assign a **3D affordance probability** to each Point‑E generation, even if the affordance is occluded in the input view.
+- For each Point‑E generation `P_k`:
+  1. Render `P_k` into **3 views** around the object:
+     - View 0: match the *input camera* pose (the simulator view that produced the RGB fed to Point‑E).
+     - View 1: rotate the camera by +120° yaw around the object center.
+     - View 2: rotate the camera by +240° yaw around the object center.
+  2. Run CLIPSeg on each render to obtain masks `M_k^0, M_k^1, M_k^2`.
+  3. Project the 3D points of `P_k` into each view and sample the mask values to obtain per-point weights `w_k^i`.
+  4. Aggregate the per-point weights across views (recommended: `max_i w_k^i`) to get a final semantic weight `w_k` for that generation.
+- Finally, aggregate per-point weights into a voxel grid (e.g., average weights per voxel) to obtain `SemanticWeight(v)` for the score volume.
 
 **6.3. Combined semantic variance score**
 
@@ -269,10 +272,10 @@ This document turns the high-level proposal in `documents/project.md` into a con
   1. Choose an initial “bad” view (e.g., front view where handle is occluded).
   2. For each step `t`:
      - Render RGB from current view.
-     - Run CLIPSeg → mask.
      - Run Point-E multi-seed generation.
+     - For each Point‑E generation: render 3 views (0/120/240° yaw), run CLIPSeg per render, and project masks back to 3D to get semantic weights.
      - Compute variance field and semantic score.
-     - Log total variance, mask statistics, and any debug images.
+     - Log total variance, semantic statistics, and any debug images.
      - Invoke policy to get `next_view_id`.
      - Move to next view.
   3. After `K` steps, compute final handle localization and mark success/failure.
@@ -422,4 +425,3 @@ This document turns the high-level proposal in `documents/project.md` into a con
 ---
 
 This plan is intentionally detailed; you don’t need to implement every optional ablation or visualization to pass the course. Prioritize getting a robust end-to-end pipeline (Sections 1–8), then focus on the most impactful experiments and figures (Sections 9–10), and finally polish reproducibility and writing (Sections 11–12).
-

@@ -12,7 +12,11 @@ import numpy as np
 
 from .config import ActiveHallucinationConfig
 from .pointe_wrapper import PointEGenerator
-from .segmentation import CLIPSegSegmenter, compute_point_mask_weights
+from .segmentation import (
+    CLIPSegSegmenter,
+    compute_point_mask_weights_multiview,
+    render_point_cloud_view,
+)
 from .simulator import VirtualTabletopSimulator, pose_to_matrix
 from .variance_field import (
     VoxelGrid,
@@ -63,13 +67,30 @@ class ActiveHallucinationRunner:
         self._output_root = Path(cfg.experiment.output_dir) / cfg.experiment.trajectory_name
         _ensure_dir(self._output_root)
 
-    def _save_debug(self, step: int, rgb: np.ndarray, mask: np.ndarray, score_grid: np.ndarray) -> None:
+    def _save_debug(
+        self,
+        step: int,
+        rgb: np.ndarray,
+        score_grid: np.ndarray,
+        *,
+        semantic_render: Optional[np.ndarray] = None,
+        semantic_mask: Optional[np.ndarray] = None,
+    ) -> None:
         if not self.cfg.experiment.save_debug:
             return
         import imageio
 
         imageio.imwrite(self._output_root / f"step_{step:02d}_rgb.png", rgb.astype(np.uint8))
-        imageio.imwrite(self._output_root / f"step_{step:02d}_mask.png", (mask * 255).astype(np.uint8))
+
+        if semantic_render is not None:
+            imageio.imwrite(
+                self._output_root / f"step_{step:02d}_cloud0_view0_render.png", semantic_render.astype(np.uint8)
+            )
+        if semantic_mask is not None:
+            imageio.imwrite(
+                self._output_root / f"step_{step:02d}_cloud0_view0_mask.png", (semantic_mask * 255).astype(np.uint8)
+            )
+
         proj = np.max(score_grid, axis=2)
         proj = (proj / (proj.max() + 1e-8) * 255).astype(np.uint8)
         imageio.imwrite(self._output_root / f"step_{step:02d}_score.png", proj)
@@ -93,16 +114,44 @@ class ActiveHallucinationRunner:
 
         for step in range(cfg.experiment.num_steps):
             rgb, _ = self.sim.render_view(current)
-            mask = self.segmenter.segment_affordance(rgb, cfg.segmentation.prompt)
 
             clouds = self.pointe.generate_point_clouds_from_image(
                 rgb, prompt=cfg.pointe.prompt, num_seeds=cfg.pointe.num_seeds, seed_list=cfg.pointe.seed_list
             )
 
-            cam_to_world = pose_to_matrix(poses[current])
-            point_weights = [
-                compute_point_mask_weights(pc, cam_to_world, cfg.simulator.intrinsics, mask) for pc in clouds
-            ]
+            base_cam_to_world = pose_to_matrix(poses[current])
+
+            # Semantic painting happens per-PointE generation: render each cloud from multiple
+            # azimuths (0, 120, 240 deg by default), run CLIPSeg per render, then project masks
+            # back to 3D points to obtain per-point semantic weights.
+            point_weights = []
+            semantic_render0 = None
+            semantic_mask0 = None
+            for cloud_idx, pc in enumerate(clouds):
+                w = compute_point_mask_weights_multiview(
+                    pc,
+                    base_cam_to_world,
+                    cfg.simulator.intrinsics,
+                    self.segmenter,
+                    prompt=cfg.segmentation.prompt,
+                    num_views=cfg.segmentation.views_per_cloud,
+                    yaw_step_deg=cfg.segmentation.yaw_step_deg,
+                    aggregation=cfg.segmentation.aggregation,
+                    point_radius_px=cfg.segmentation.render_point_radius_px,
+                    blur_sigma=cfg.segmentation.render_blur_sigma,
+                )
+                point_weights.append(w)
+
+                # Save one representative semantic render/mask for debugging (cloud 0, view 0).
+                if cfg.experiment.save_debug and cloud_idx == 0:
+                    semantic_render0 = render_point_cloud_view(
+                        pc,
+                        base_cam_to_world,
+                        cfg.simulator.intrinsics,
+                        point_radius_px=cfg.segmentation.render_point_radius_px,
+                        blur_sigma=cfg.segmentation.render_blur_sigma,
+                    )
+                    semantic_mask0 = self.segmenter.segment_affordance(semantic_render0, cfg.segmentation.prompt)
 
             variance_grid = compute_variance_field(clouds, cfg.variance)
             semantic_grid = accumulate_semantic_weights(clouds, point_weights, cfg.variance)
@@ -153,7 +202,7 @@ class ActiveHallucinationRunner:
                 )
             )
 
-            self._save_debug(step, rgb, mask, score_grid)
+            self._save_debug(step, rgb, score_grid, semantic_render=semantic_render0, semantic_mask=semantic_mask0)
             visited.add(next_view)
             current = next_view
 

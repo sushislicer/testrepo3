@@ -26,7 +26,13 @@ except ImportError:
 
 from src.config import ActiveHallucinationConfig
 from src.pointe_wrapper import PointEGenerator
-from src.segmentation import CLIPSegSegmenter, compute_point_mask_weights
+from src.segmentation import (
+    CLIPSegSegmenter,
+    compute_point_mask_weights_multiview,
+    project_points_to_pixels,
+    render_point_cloud_view,
+)
+from src.simulator import generate_orbital_poses, pose_to_matrix
 from src.variance_field import (
     compute_variance_field,
     accumulate_semantic_weights,
@@ -36,18 +42,11 @@ from src.variance_field import (
 )
 
 
-@dataclass
-class SimpleIntrinsics:
-    fx: float; fy: float; cx: float; cy: float
-
-
-def get_virtual_camera(image_size: int = 512):
-    focal = image_size
-    intrinsics = SimpleIntrinsics(fx=focal, fy=focal, cx=image_size/2, cy=image_size/2)
-    # Camera at (0, 0, 2.5) looking at (0, 0, 0)
-    cam_to_world = np.eye(4, dtype=np.float32)
-    cam_to_world[:3, 3] = [0.0, 0.0, 2.5]
-    return cam_to_world, intrinsics
+def get_virtual_camera(cfg: ActiveHallucinationConfig):
+    # Match the simulator's camera convention (orbit around origin looking at (0,0,0)).
+    pose = generate_orbital_poses(1, cfg.simulator.radius, cfg.simulator.elevation_deg)[0]
+    cam_to_world = pose_to_matrix(pose)
+    return cam_to_world, cfg.simulator.intrinsics
 
 
 def resolve_image_path(path_str: str) -> Path:
@@ -67,28 +66,14 @@ def save_projection_debug(cloud: np.ndarray, cam_to_world: np.ndarray, intr, mas
     """
     save_dir.mkdir(parents=True, exist_ok=True)
     
-    # 1. Project Points manually for visualization
-    world_to_cam = np.linalg.inv(cam_to_world)
-    ones = np.ones((cloud.shape[0], 1))
-    hom = np.hstack([cloud, ones])
-    cam_pts = (world_to_cam @ hom.T).T
-    
-    # Standard Pinhole Projection
-    # Note: Check coordinate system. Usually -Z is forward in CV, but Point-E might vary.
-    # We assume X=Right, Y=Up, Z=Forward/Back
-    x, y, z = cam_pts[:, 0], cam_pts[:, 1], cam_pts[:, 2]
-    
-    # Filter points behind camera
-    valid_z = np.abs(z) > 0.1
-    
-    # Simple projection u = fx * x/z + cx
-    # Note: If Z is negative (standard OpenGL), use -z. If positive, use z.
-    # Trying standard division:
-    u = (intr.fx * x / -z) + intr.cx
-    v = (intr.fy * y / -z) + intr.cy # Flip Y if image is inverted
-    
-    u = u[valid_z]
-    v = v[valid_z]
+    # 1. Project Points using the shared helper (OpenGL camera convention: forward is -Z).
+    pix = project_points_to_pixels(cloud, cam_to_world, intr)
+    u = pix[:, 0]
+    v = pix[:, 1]
+    depth = pix[:, 2]
+    valid = depth > 0
+    u = u[valid]
+    v = v[valid]
 
     # 2. Plot
     plt.figure(figsize=(10, 10))
@@ -157,34 +142,49 @@ def main():
     
     # 1. Point-E
     clouds = PointEGenerator(cfg.pointe).generate_point_clouds_from_image(img_arr)
-    
-    # 2. CLIPSeg
-    mask = CLIPSegSegmenter(cfg.segmentation).segment_affordance(img_arr, prompt=args.prompt)
-    
-    # Mask Diagnostics
-    mask_max = mask.max()
-    print(f"[DEBUG] Mask Max Value: {mask_max:.4f}")
-    if mask_max < 0.01:
-        print("  -> ERROR: CLIPSeg found nothing. Check your prompt or image.")
-    
-    mask_path = PROJECT_ROOT / "outputs" / "debug_mask.png"
-    mask_path.parent.mkdir(parents=True, exist_ok=True)
-    Image.fromarray((mask * 255).astype(np.uint8)).save(mask_path)
 
-    # 3. Projection & Weights
-    cam_to_world, intrinsics = get_virtual_camera(512)
-    
-    # --- RUN NEW PROJECTION DEBUGGER ---
+    # 2. Multiview semantic painting on the generated 3D point clouds
+    cam_to_world, intrinsics = get_virtual_camera(cfg)
+    segmenter = CLIPSegSegmenter(cfg.segmentation)
+
     if clouds:
-        save_projection_debug(clouds[0], cam_to_world, intrinsics, mask, PROJECT_ROOT / "outputs")
-    
-    point_weights_list = [compute_point_mask_weights(c, cam_to_world, intrinsics, mask) for c in clouds]
-    
-    # Weights Diagnostics
-    total_weight = sum([w.sum() for w in point_weights_list])
-    print(f"[DEBUG] Total Semantic Weight accumulated: {total_weight:.4f}")
+        render0 = render_point_cloud_view(
+            clouds[0],
+            cam_to_world,
+            intrinsics,
+            point_radius_px=cfg.segmentation.render_point_radius_px,
+            blur_sigma=cfg.segmentation.render_blur_sigma,
+        )
+        mask0 = segmenter.segment_affordance(render0, prompt=args.prompt)
+        render_path = PROJECT_ROOT / "outputs" / "debug_cloud_render.png"
+        mask_path = PROJECT_ROOT / "outputs" / "debug_cloud_mask.png"
+        render_path.parent.mkdir(parents=True, exist_ok=True)
+        Image.fromarray(render0).save(render_path)
+        Image.fromarray((mask0 * 255).astype(np.uint8)).save(mask_path)
+
+        # Projection alignment debug: red points should overlap the white handle region.
+        save_projection_debug(clouds[0], cam_to_world, intrinsics, mask0, PROJECT_ROOT / "outputs")
+
+    point_weights_list = [
+        compute_point_mask_weights_multiview(
+            c,
+            cam_to_world,
+            intrinsics,
+            segmenter,
+            prompt=args.prompt,
+            num_views=cfg.segmentation.views_per_cloud,
+            yaw_step_deg=cfg.segmentation.yaw_step_deg,
+            aggregation=cfg.segmentation.aggregation,
+            point_radius_px=cfg.segmentation.render_point_radius_px,
+            blur_sigma=cfg.segmentation.render_blur_sigma,
+        )
+        for c in clouds
+    ]
+
+    total_weight = float(sum(w.sum() for w in point_weights_list))
+    print(f"[DEBUG] Total Semantic Weight accumulated (multiview): {total_weight:.4f}")
     if total_weight == 0:
-        print("  -> ERROR: No 3D points landed on the 2D mask. Check 'debug_projection_alignment.png'.")
+        print("  -> WARNING: No semantic signal. Check prompt/model and debug renders in outputs/.")
 
     # 4. Fields
     var_grid = compute_variance_field(clouds, cfg.variance)

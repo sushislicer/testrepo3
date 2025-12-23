@@ -54,6 +54,13 @@ class SegmentationConfig:
     threshold: float = 0.25
     model_name: str = "CIDAS/clipseg-rd64-refined"
     device: str = "cuda"
+    # Multiview semantic painting: render each Point-E generation from multiple viewpoints,
+    # run CLIPSeg per render, then project masks back to 3D points.
+    views_per_cloud: int = 3
+    yaw_step_deg: Optional[float] = None  # default: 360 / views_per_cloud
+    aggregation: str = "max"  # max | mean | sum
+    render_point_radius_px: int = 2
+    render_blur_sigma: float = 0.8
 
 
 @dataclass
