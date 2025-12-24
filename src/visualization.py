@@ -44,9 +44,13 @@ def render_fallback_2d(point_clouds: List[np.ndarray], save_path: Optional[str] 
     
     # Convert figure to numpy array
     fig.canvas.draw()
-    data = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
     w, h = fig.canvas.get_width_height()
-    image = data.reshape((h, w, 3))
+    if hasattr(fig.canvas, "buffer_rgba"):
+        rgba = np.asarray(fig.canvas.buffer_rgba())
+        image = np.asarray(rgba, dtype=np.uint8).reshape((h, w, 4))[..., :3]
+    else:
+        data = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
+        image = data.reshape((h, w, 3))
     
     if save_path:
         Path(save_path).parent.mkdir(parents=True, exist_ok=True)
