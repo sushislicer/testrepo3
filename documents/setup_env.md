@@ -10,6 +10,9 @@ Then, edit your .bashrc file and add the following line:
 
 `export PYOPENGL_PLATFORM=egl`
 `export PYRENDER_PLATFORM=egl`
+`export XDG_RUNTIME_DIR=/tmp/xdg` 
+`export EGL_PLATFORM=surfaceless` 
+`export __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json `
 
 Then, source your .bashrc file:
 
@@ -18,3 +21,10 @@ Then, source your .bashrc file:
 Then, test if EGL is working:
 
 `python -c "import pyrender; r = pyrender.OffscreenRenderer(100, 100); print('EGL ready: OK')"`
+`XDG_RUNTIME_DIR=/tmp/xdg EGL_PLATFORM=surfaceless __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json python -c "from open3d.visualization import rendering; r=rendering.OffscreenRenderer(64,64); r.release(); print('OK')"`
+
+
+
+  - export XDG_RUNTIME_DIR=/tmp/xdg; mkdir -p $XDG_RUNTIME_DIR; chmod 700 $XDG_RUNTIME_DIR
+  - export EGL_PLATFORM=surfaceless
+  - export __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json

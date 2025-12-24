@@ -38,7 +38,7 @@ class CLIPSegSegmenter:
         try:
             from transformers import CLIPSegProcessor, CLIPSegForImageSegmentation
 
-            self.processor = CLIPSegProcessor.from_pretrained(self.cfg.model_name)
+            self.processor = CLIPSegProcessor.from_pretrained(self.cfg.model_name, use_fast=True)
             self.model = CLIPSegForImageSegmentation.from_pretrained(self.cfg.model_name).to(self.device)
             self.available = True
             logger.info("Loaded CLIPSeg model on %s", self.device)

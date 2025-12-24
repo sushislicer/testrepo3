@@ -39,9 +39,9 @@ class PointEConfig:
     device: str = "cuda"  # fall back to cpu if unavailable
     num_points: int = 4096
     num_seeds: int = 5
-    guidance_scale: float = 3.0
+    guidance_scale: float = 12.1
     model_name: str = "point-e"  # descriptive; wrapper resolves to actual weights
-    prompt: str = "a photo of a mug"
+    prompt: str = "a photo of a mug with a handle"
     seed_list: Optional[List[int]] = None
     # Multi-seed alignment: post-process multiple Point-E hypotheses so the
     # *visible/front* surfaces line up across seeds (robustly ignoring outliers

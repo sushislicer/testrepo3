@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import colorsys
 import logging
+import os
+import subprocess
+import sys
+import tempfile
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -16,6 +20,143 @@ except ImportError:
     o3d = None
 
 logger = logging.getLogger(__name__)
+
+
+def _is_headless() -> bool:
+    return not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+
+
+def _render_point_cloud_offscreen_safe(
+    point_clouds: List[np.ndarray],
+    width: int,
+    height: int,
+    view_point: Optional[dict],
+    timeout_s: float = 8.0,
+) -> Tuple[Optional[np.ndarray], Optional[str]]:
+    # Run Open3D offscreen rendering in a separate interpreter so EGL/GL failures
+    # (including segfaults) don't take down the main process.
+    try:
+        with tempfile.TemporaryDirectory(prefix="o3d_offscreen_", dir=str(Path.cwd())) as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            pcs_path = tmpdir_path / "point_clouds.npz"
+            out_path = tmpdir_path / "image.npy"
+
+            np.savez_compressed(pcs_path, **{f"pc_{i:03d}": pc for i, pc in enumerate(point_clouds)})
+
+            worker_code = r"""
+import colorsys
+import os
+from pathlib import Path
+import numpy as np
+
+pcs_path = Path(os.environ["O3D_PCS_PATH"])
+out_path = Path(os.environ["O3D_OUT_PATH"])
+width = int(os.environ["O3D_WIDTH"])
+height = int(os.environ["O3D_HEIGHT"])
+
+runtime_dir = os.environ.get("XDG_RUNTIME_DIR") or str(out_path.parent / "xdg_runtime")
+os.environ["XDG_RUNTIME_DIR"] = runtime_dir
+os.makedirs(runtime_dir, exist_ok=True)
+
+import open3d as o3d
+from open3d.visualization import rendering
+
+data = np.load(pcs_path)
+pcs = [data[k] for k in sorted(data.files)]
+
+renderer = rendering.OffscreenRenderer(width, height)
+scene = renderer.scene
+scene.set_background([1.0, 1.0, 1.0, 1.0])
+
+has_geo = False
+all_points = []
+for idx, pc in enumerate(pcs):
+    if len(pc) == 0:
+        continue
+    has_geo = True
+    hue = idx / max(len(pcs), 1)
+    color = np.array(colorsys.hsv_to_rgb(hue, 0.8, 1.0), dtype=np.float32)
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(pc)
+    pcd.colors = o3d.utility.Vector3dVector(np.tile(color, (pc.shape[0], 1)))
+
+    mat = rendering.MaterialRecord()
+    mat.shader = "defaultUnlit"
+    mat.point_size = 3.0
+    scene.add_geometry(f"pcd_{idx}", pcd, mat)
+    all_points.append(pc)
+
+if not has_geo:
+    np.save(out_path, np.zeros((height, width, 3), dtype=np.uint8))
+    raise SystemExit(0)
+
+all_points_np = np.concatenate(all_points, axis=0)
+center = np.mean(all_points_np, axis=0).astype(np.float32)
+extent = (np.max(all_points_np, axis=0) - np.min(all_points_np, axis=0)).astype(np.float32)
+radius = float(np.linalg.norm(extent) + 1e-6)
+
+eye = (center + np.array([0.0, 0.0, 2.5 * radius], dtype=np.float32)).astype(np.float32)
+up = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+renderer.setup_camera(60.0, center, eye, up)
+
+image_o3d = renderer.render_to_image()
+image_np = np.asarray(image_o3d)
+if hasattr(renderer, "release"):
+    renderer.release()
+else:
+    del renderer
+
+if image_np.ndim == 3 and image_np.shape[-1] == 4:
+    image_np = image_np[..., :3]
+if image_np.dtype != np.uint8:
+    image_np = (np.clip(image_np, 0.0, 1.0) * 255.0).astype(np.uint8)
+
+np.save(out_path, image_np)
+"""
+
+            env = os.environ.copy()
+            # Prefer headless EGL on NVIDIA in containerized environments:
+            # - EGL_PLATFORM=surfaceless avoids requiring X11/Wayland.
+            # - Pin vendor to NVIDIA to avoid GLVND selecting Mesa inside Docker.
+            if "EGL_PLATFORM" not in env:
+                env["EGL_PLATFORM"] = "surfaceless"
+            nvidia_vendor_json = "/usr/share/glvnd/egl_vendor.d/10_nvidia.json"
+            if "__EGL_VENDOR_LIBRARY_FILENAMES" not in env and Path(nvidia_vendor_json).exists():
+                env["__EGL_VENDOR_LIBRARY_FILENAMES"] = nvidia_vendor_json
+            env.update(
+                {
+                    "O3D_PCS_PATH": str(pcs_path),
+                    "O3D_OUT_PATH": str(out_path),
+                    "O3D_WIDTH": str(width),
+                    "O3D_HEIGHT": str(height),
+                }
+            )
+
+            try:
+                completed = subprocess.run(
+                    [sys.executable, "-c", worker_code],
+                    env=env,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=timeout_s,
+                )
+            except subprocess.TimeoutExpired:
+                return None, f"OffscreenRenderer timed out after {timeout_s:.1f}s"
+
+            if completed.returncode != 0:
+                stderr_tail = (completed.stderr or "").strip().splitlines()[-1:] or [""]
+                return None, f"OffscreenRenderer failed (exit={completed.returncode}): {stderr_tail[0]}"
+
+            if not out_path.exists():
+                return None, "OffscreenRenderer produced no output"
+
+            try:
+                return np.load(out_path), None
+            except Exception as e:
+                return None, f"OffscreenRenderer output unreadable: {type(e).__name__}: {e}"
+    except Exception as e:
+        return None, f"OffscreenRenderer wrapper failed: {type(e).__name__}: {e}"
 
 
 def render_fallback_2d(point_clouds: List[np.ndarray], save_path: Optional[str] = None) -> np.ndarray:
@@ -71,10 +212,30 @@ def render_point_cloud_overlay(
     if o3d is None:
         return render_fallback_2d(point_clouds, save_path)
 
-    # Attempt Open3D Headless
+    width = 800
+    height = 800
+
+    # Headless: try OffscreenRenderer (EGL/OSMesa) in a subprocess to avoid hard crashes.
+    if _is_headless():
+        image_np, err = _render_point_cloud_offscreen_safe(
+            point_clouds=point_clouds, width=width, height=height, view_point=view_point
+        )
+        if image_np is not None:
+            if save_path:
+                Path(save_path).parent.mkdir(parents=True, exist_ok=True)
+                plt.imsave(save_path, image_np)
+            return image_np
+        if err:
+            logger.warning(
+                "Open3D OffscreenRenderer unavailable (%s). "
+                "Headless Open3D usually needs EGL (GPU) or OSMesa (CPU).",
+                err,
+            )
+
+    # Attempt legacy Visualizer (often works via X11 / Xvfb, or CPU OSMesa if installed).
     try:
         vis = o3d.visualization.Visualizer()
-        vis.create_window(visible=False, width=800, height=800)
+        vis.create_window(visible=False, width=width, height=height)
         
         has_geo = False
         for idx, pc in enumerate(point_clouds):
@@ -90,7 +251,7 @@ def render_point_cloud_overlay(
 
         if not has_geo:
             vis.destroy_window()
-            return np.zeros((800, 800, 3), dtype=np.uint8)
+            return np.zeros((height, width, 3), dtype=np.uint8)
 
         ctr = vis.get_view_control()
         if ctr is None:
@@ -112,7 +273,14 @@ def render_point_cloud_overlay(
         return image_np
 
     except Exception as e:
-        logger.warning(f"Open3D rendering failed ({e}). Using 2D fallback.")
+        hint = ""
+        msg = str(e)
+        if _is_headless() and ("OSMesa" in msg or "Failed to create window" in msg):
+            hint = (
+                " (Headless hint: install `libosmesa6` and set `OPEN3D_CPU_RENDERING=1`, "
+                "or run under `xvfb-run`.)"
+            )
+        logger.warning(f"Open3D rendering failed ({e}). Using 2D fallback.{hint}")
         if 'vis' in locals(): vis.destroy_window()
         return render_fallback_2d(point_clouds, save_path)
 
