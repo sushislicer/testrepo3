@@ -13,6 +13,7 @@ import torch
 from PIL import Image
 
 from .config import PointEConfig
+from .pointe_alignment import AlignmentParams, align_clouds_to_reference_front
 
 logger = logging.getLogger(__name__)
 
@@ -147,24 +148,37 @@ class PointEGenerator:
         num_seeds: Optional[int] = None,
         seed_list: Optional[List[int]] = None,
     ) -> List[np.ndarray]:
-        """Generate point clouds with auto-cropping and spatial realignment."""
+        """Generate point clouds with auto-cropping and robust multi-seed alignment.
+
+        Notes:
+        - Cropping helps Point-E focus on small objects in a large viewport.
+        - Alignment is performed *across seeds* so that global pose jitter does not
+          dominate the downstream variance computation.
+        """
         prompt = prompt or self.cfg.prompt
         num = num_seeds or self.cfg.num_seeds
         seeds = seed_list or self.cfg.seed_list or list(range(num))
         
-        crop_img, scale, (off_x, off_y) = self._get_crop_transform(image)
+        crop_img, _, _ = self._get_crop_transform(image)
         
         clouds: List[np.ndarray] = []
         for i in range(num):
             seed = seeds[i] if i < len(seeds) else seeds[-1] + i + 1
             
             raw_pts = self._sample_once(crop_img, prompt, seed)
+            clouds.append(np.asarray(raw_pts, dtype=np.float32))
             
-            # Re-align to World/Full-Image Frame
-            pts = raw_pts * scale
-            pts[:, 0] += off_x
-            pts[:, 1] -= off_y 
-            
-            clouds.append(pts)
-            
+        if self.cfg.align_across_seeds and len(clouds) > 1:
+            params = AlignmentParams(
+                max_yaw_deg=self.cfg.alignment_max_yaw_deg,
+                yaw_step_deg=self.cfg.alignment_yaw_step_deg,
+                trim_ratio=self.cfg.alignment_trim_ratio,
+                core_ratio=self.cfg.alignment_core_ratio,
+                surface_grid=self.cfg.alignment_surface_grid,
+                max_points=self.cfg.alignment_max_points,
+            )
+            try:
+                clouds = align_clouds_to_reference_front(clouds, params=params, reference_idx=0, rng_seed=0)
+            except Exception as exc:
+                logger.warning("Point-E seed alignment failed (%s); returning unaligned clouds.", exc)
         return clouds

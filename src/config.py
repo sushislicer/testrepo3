@@ -24,8 +24,14 @@ class SimulatorConfig:
     num_views: int = 24
     mesh_path: str = "assets/meshes/example.obj"
     light_intensity: float = 3.5
+    ambient_light: float = 0.15
     background_color: List[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])
     intrinsics: CameraIntrinsics = field(default_factory=CameraIntrinsics)
+    auto_zoom: bool = True
+    target_fill: float = 0.65  # fraction of min(image_w,image_h) occupied by object
+    auto_exposure: bool = True
+    exposure_target_mean: float = 80.0  # target mean intensity on object pixels (0-255)
+    exposure_max_gain: float = 8.0
 
 
 @dataclass
@@ -37,6 +43,17 @@ class PointEConfig:
     model_name: str = "point-e"  # descriptive; wrapper resolves to actual weights
     prompt: str = "a photo of a mug"
     seed_list: Optional[List[int]] = None
+    # Multi-seed alignment: post-process multiple Point-E hypotheses so the
+    # *visible/front* surfaces line up across seeds (robustly ignoring outliers
+    # such as hallucinated handles). This makes variance concentrate on truly
+    # ambiguous/occluded regions instead of global pose jitter.
+    align_across_seeds: bool = True
+    alignment_max_yaw_deg: float = 30.0
+    alignment_yaw_step_deg: float = 5.0
+    alignment_trim_ratio: float = 0.7  # fraction of closest points used for scoring
+    alignment_core_ratio: float = 1.0  # optional extra outlier rejection (1.0 = off)
+    alignment_surface_grid: int = 96  # resolution for front-surface extraction
+    alignment_max_points: int = 2048  # downsample for speed
 
 
 @dataclass
