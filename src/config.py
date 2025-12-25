@@ -61,7 +61,7 @@ class VarianceConfig:
     grid_bounds: float = 0.5  # cube half-extent in meters
     resolution: int = 96
     min_points_per_voxel: int = 1
-    gaussian_sigma: Optional[float] = None
+    gaussian_sigma: Optional[float] = 1.0  # voxels; helps seed overlap
     topk_ratio: float = 0.05  # fraction of voxels used for centroid
 
 

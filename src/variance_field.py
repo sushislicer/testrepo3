@@ -45,25 +45,35 @@ def _occupancy_grid_from_points(points: np.ndarray, grid: VoxelGrid) -> np.ndarr
 
 
 def compute_variance_field(point_clouds: List[np.ndarray], cfg: VarianceConfig) -> np.ndarray:
-    """Compute occupancy variance across K point clouds on a voxel grid."""
+    """Compute occupancy variance across K point clouds on a voxel grid.
+    
+    We apply Gaussian blurring to individual occupancy grids before computing
+    variance. This allows points that are 'close' across different seeds to
+    overlap, reducing noise and concentrating variance on truly ambiguous regions.
+    """
     grid = VoxelGrid(bounds=cfg.grid_bounds, resolution=cfg.resolution)
     occupancy = []
     
     for pc in point_clouds:
         occ = _occupancy_grid_from_points(pc, grid)
-        occupancy.append(occ.astype(np.float32))
+        occ_f = occ.astype(np.float32)
+        
+        # Apply blurring to each seed's occupancy to handle point jitter
+        if cfg.gaussian_sigma and gaussian_filter is not None:
+            occ_f = gaussian_filter(occ_f, sigma=cfg.gaussian_sigma)
+            
+        occupancy.append(occ_f)
         
     if not occupancy:
         return np.zeros((grid.resolution, grid.resolution, grid.resolution), dtype=np.float32)
 
     stack = np.stack(occupancy, axis=0)
     mean = stack.mean(axis=0)
-    # Bernoulli variance: p(1-p)
+    
+    # Bernoulli variance: p(1-p). 
+    # With blurred p, this is low where seeds consistently agree on occupancy.
     var = mean * (1.0 - mean)  
 
-    if cfg.gaussian_sigma and gaussian_filter is not None:
-        var = gaussian_filter(var, sigma=cfg.gaussian_sigma)
-        
     return var
 
 

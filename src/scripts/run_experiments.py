@@ -28,9 +28,9 @@ from src.visualization import plot_success_rates, plot_vrr_curves
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run batch experiments.")
     parser.add_argument("--config", type=str, default=None, help="Path to base YAML config.")
-    parser.add_argument("--mesh_glob", type=str, default="assets/meshes/*.obj", help="Glob pattern.")
+    parser.add_argument("--mesh_glob", type=str, default="assets/*.obj", help="Glob pattern.")
     parser.add_argument("--policies", type=str, default="active,random,geometric", help="Policies list.")
-    parser.add_argument("--trials", type=int, default=1, help="Trials per setting.")
+    parser.add_argument("--trials", type=int, default=3, help="Trials per setting.")
     parser.add_argument("--output_dir", type=str, default="outputs/batch_results", help="Output dir.")
     return parser.parse_args()
 
