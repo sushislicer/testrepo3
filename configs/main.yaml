@@ -13,9 +13,9 @@ simulator:
     cy: 256.0
 pointe:
   device: cuda
-  num_points: 4096
+  num_points: 8192
   num_seeds: 5
-  guidance_scale: 12.1
+  guidance_scale: 10
   prompt: "a photo of a mug with a handle"
 variance:
   grid_bounds: 0.5

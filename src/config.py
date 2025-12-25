@@ -37,9 +37,9 @@ class SimulatorConfig:
 @dataclass
 class PointEConfig:
     device: str = "cuda"  # fall back to cpu if unavailable
-    num_points: int = 4096
+    num_points: int = 8192
     num_seeds: int = 5
-    guidance_scale: float = 12.1
+    guidance_scale: float = 10.0
     model_name: str = "point-e"  # descriptive; wrapper resolves to actual weights
     prompt: str = "a photo of a mug with a handle"
     seed_list: Optional[List[int]] = None

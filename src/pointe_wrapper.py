@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import random
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
@@ -34,6 +35,7 @@ class PointEGenerator:
         self.available = False
         self.sampler = None
         self.device = torch.device(cfg.device if torch.cuda.is_available() or cfg.device == "cpu" else "cpu")
+        self._native_total_points: Optional[int] = None
         self._init_model()
 
     def _init_model(self) -> None:
@@ -56,11 +58,19 @@ class PointEGenerator:
             up_model.load_state_dict(load_checkpoint(upsampler_name, self.device))
             up_diffusion = diffusion_from_config(DIFFUSION_CONFIGS[upsampler_name])
 
+            # Point-E's released checkpoints have fixed context lengths per stage.
+            # For base40M+upsample, this is typically 1024 + 3072 = 4096 points total.
+            # Passing other values into PointCloudSampler(num_points=...) triggers
+            # internal assertions (often surfacing as an empty AssertionError()).
+            base_ctx = int(MODEL_CONFIGS[base_name]["n_ctx"])
+            up_ctx = int(MODEL_CONFIGS[upsampler_name]["n_ctx"])
+            self._native_total_points = base_ctx + up_ctx
+
             self.sampler = PointCloudSampler(
                 device=self.device,
                 models=[base_model, up_model],
                 diffusions=[base_diffusion, up_diffusion],
-                num_points=[1024, max(self.cfg.num_points - 1024, 0)],
+                num_points=[base_ctx, up_ctx],
                 aux_channels=["R", "G", "B"],
                 guidance_scale=[self.cfg.guidance_scale, self.cfg.guidance_scale],
             )
@@ -104,7 +114,7 @@ class PointEGenerator:
         
         return crop_img, scale, (off_x, off_y)
 
-    def _sample_once(self, image: np.ndarray, prompt: str, seed: int) -> np.ndarray:
+    def _sample_native_once(self, image: np.ndarray, prompt: str, seed: int) -> np.ndarray:
         _set_seed(seed)
         if not self.available or self.sampler is None:
             return self._synthetic_point_cloud(seed)
@@ -118,10 +128,8 @@ class PointEGenerator:
             for s in self.sampler.sample_batch_progressive(batch_size=1, model_kwargs=kwargs):
                 samples = s
         except Exception as exc:
-            logger.warning("Image conditioning failed (%s), retrying text-only.", exc)
-            kwargs = dict(texts=[prompt])
-            for s in self.sampler.sample_batch_progressive(batch_size=1, model_kwargs=kwargs):
-                samples = s
+            logger.warning("Point-E sampling failed (%s); using synthetic fallback.", exc)
+            return self._synthetic_point_cloud(seed)
 
         if samples is None:
             return self._synthetic_point_cloud(seed)
@@ -132,6 +140,59 @@ class PointEGenerator:
             pts = pts.detach().cpu().numpy()
         
         return np.asarray(pts, dtype=np.float32)
+
+    def _sample_once(self, image: np.ndarray, prompt: str, seed: int) -> np.ndarray:
+        """
+        Generate a point cloud with exactly cfg.num_points points.
+
+        Point-E's base+upsample checkpoints natively generate a fixed number of points
+        (typically 4096). To support higher requested counts (e.g., 8192), we sample
+        multiple independent native clouds and concatenate, then subsample to the target.
+        """
+        target = int(self.cfg.num_points)
+        native = int(self._native_total_points or 4096)
+
+        if target <= 0:
+            return np.zeros((0, 3), dtype=np.float32)
+
+        if target <= native:
+            pts = self._sample_native_once(image, prompt, seed)
+            if pts.shape[0] == target:
+                return pts
+            rng = np.random.RandomState(seed)
+            idx = rng.choice(pts.shape[0], size=target, replace=pts.shape[0] < target)
+            return pts[idx]
+
+        passes = int(math.ceil(target / native))
+        max_passes = 8
+        if passes > max_passes:
+            logger.warning(
+                "Requested %d points requires %d Point-E passes; clamping to %d passes (%d points).",
+                target,
+                passes,
+                max_passes,
+                max_passes * native,
+            )
+            passes = max_passes
+
+        chunks: List[np.ndarray] = []
+        for pass_idx in range(passes):
+            pass_seed = int(seed + pass_idx * 1_000_003)
+            chunks.append(self._sample_native_once(image, prompt, pass_seed))
+
+        pts_all = np.concatenate(chunks, axis=0) if chunks else np.zeros((0, 3), dtype=np.float32)
+        if pts_all.shape[0] == target:
+            return pts_all
+
+        rng = np.random.RandomState(seed)
+        take = min(target, pts_all.shape[0])
+        idx = rng.choice(pts_all.shape[0], size=take, replace=False)
+        pts_sel = pts_all[idx]
+
+        if pts_sel.shape[0] < target:
+            pad_idx = rng.choice(pts_sel.shape[0], size=(target - pts_sel.shape[0]), replace=True)
+            pts_sel = np.concatenate([pts_sel, pts_sel[pad_idx]], axis=0)
+        return np.asarray(pts_sel, dtype=np.float32)
 
     def _synthetic_point_cloud(self, seed: int) -> np.ndarray:
         _set_seed(seed)
