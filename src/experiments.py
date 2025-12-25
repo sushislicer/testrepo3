@@ -11,6 +11,14 @@ from typing import Dict, List, Optional, Set
 import numpy as np
 
 from .config import ActiveHallucinationConfig
+from .cloud_frame import (
+    compute_object_mask,
+    estimate_orbit_distance_for_cloud,
+    estimate_yaw_align_to_mask,
+    make_cloud_orbital_poses,
+    normalize_clouds_to_bounds,
+    rotate_clouds_yaw,
+)
 from .pointe_wrapper import PointEGenerator
 from .segmentation import (
     CLIPSegSegmenter,
@@ -97,12 +105,12 @@ class ActiveHallucinationRunner:
 
     def run_episode(self, initial_view: int = 0) -> Dict:
         cfg = self.cfg
-        poses = self.sim.list_poses()
+        poses_sim = self.sim.list_poses()
         visited: Set[int] = set()
         logs: List[StepLog] = []
         vis_trajectory: List[Dict] = []
         
-        current = initial_view % len(poses)
+        current = initial_view % len(poses_sim)
         visited.add(current)
 
         grid = VoxelGrid(bounds=cfg.variance.grid_bounds, resolution=cfg.variance.resolution)
@@ -111,6 +119,9 @@ class ActiveHallucinationRunner:
             if cfg.experiment.gt_handle_centroid is not None
             else None
         )
+        # Track a persistent yaw alignment so view-index mapping stays stable even when
+        # later views are silhouette-ambiguous (e.g., handle fully occluded).
+        global_yaw_deg: Optional[float] = None
 
         for step in range(cfg.experiment.num_steps):
             rgb, _ = self.sim.render_view(current)
@@ -119,7 +130,43 @@ class ActiveHallucinationRunner:
                 rgb, prompt=cfg.pointe.prompt, num_seeds=cfg.pointe.num_seeds, seed_list=cfg.pointe.seed_list
             )
 
-            base_cam_to_world = pose_to_matrix(poses[current])
+            # --- Cloud-frame normalization + view alignment ---
+            # Normalize into an object-centric frame so voxelization/rendering is coherent.
+            clouds_norm, _norm = normalize_clouds_to_bounds(
+                clouds, grid_bounds=cfg.variance.grid_bounds, margin=0.95, center_method="median"
+            )
+            # Define an orbital camera in the *same cloud frame* (fixes starfield renders).
+            # Use the known view index so the "front face" is meaningful for hallucinations.
+            all_pts = np.concatenate([pc for pc in clouds_norm if pc.size > 0], axis=0) if clouds_norm else np.zeros((0, 3), dtype=np.float32)
+            cloud_radius = estimate_orbit_distance_for_cloud(
+                all_pts if all_pts.size > 0 else (clouds_norm[0] if clouds_norm else np.zeros((0, 3), dtype=np.float32)),
+                cfg.simulator.intrinsics,
+                target_fill=getattr(cfg.simulator, "target_fill", 0.65),
+            )
+            poses_cloud = make_cloud_orbital_poses(
+                num_views=cfg.simulator.num_views, elevation_deg=cfg.simulator.elevation_deg, radius=cloud_radius
+            )
+            base_cam_to_world = pose_to_matrix(poses_cloud[current])
+
+            # Estimate a global yaw that aligns the point cloud's silhouette to the
+            # conditioning image silhouette for this view. This enforces "front-face
+            # alignment" so occluded regions are consistent in 3D.
+            input_mask = compute_object_mask(rgb, threshold=5)
+            yaw_deg = estimate_yaw_align_to_mask(
+                clouds_norm[0] if clouds_norm else np.zeros((0, 3), dtype=np.float32),
+                input_mask=input_mask,
+                base_cam_to_world=base_cam_to_world,
+                intrinsics=cfg.simulator.intrinsics,
+                prior_yaw_deg=global_yaw_deg,
+                prior_window_deg=30.0,
+                coarse_step_deg=10.0 if global_yaw_deg is None else 5.0,
+                fine_step_deg=2.0,
+                point_radius_px=cfg.segmentation.render_point_radius_px,
+                blur_sigma=cfg.segmentation.render_blur_sigma,
+                render_threshold=10,
+            )
+            global_yaw_deg = yaw_deg
+            clouds_aligned = rotate_clouds_yaw(clouds_norm, yaw_deg=yaw_deg)
 
             # Semantic painting happens per-PointE generation: render each cloud from multiple
             # azimuths (0, 120, 240 deg by default), run CLIPSeg per render, then project masks
@@ -127,7 +174,7 @@ class ActiveHallucinationRunner:
             point_weights = []
             semantic_render0 = None
             semantic_mask0 = None
-            for cloud_idx, pc in enumerate(clouds):
+            for cloud_idx, pc in enumerate(clouds_aligned):
                 w = compute_point_mask_weights_multiview(
                     pc,
                     base_cam_to_world,
@@ -153,8 +200,8 @@ class ActiveHallucinationRunner:
                     )
                     semantic_mask0 = self.segmenter.segment_affordance(semantic_render0, cfg.segmentation.prompt)
 
-            variance_grid = compute_variance_field(clouds, cfg.variance)
-            semantic_grid = accumulate_semantic_weights(clouds, point_weights, cfg.variance)
+            variance_grid = compute_variance_field(clouds_aligned, cfg.variance)
+            semantic_grid = accumulate_semantic_weights(clouds_aligned, point_weights, cfg.variance)
             score_grid = combine_variance_and_semantics(variance_grid, semantic_grid)
             centroid, _ = extract_topk_centroid(score_grid, grid, cfg.variance.topk_ratio)
 
@@ -163,7 +210,7 @@ class ActiveHallucinationRunner:
                 # Ghosting Figure (Step 0)
                 if step == 0:
                     create_ghosting_figure(
-                        rgb, clouds, variance_grid, 
+                        rgb, clouds_aligned, variance_grid, 
                         str(self._output_root / "fig_ghosting_step0.png")
                     )
                 # Collect data for trajectory strip
@@ -176,16 +223,24 @@ class ActiveHallucinationRunner:
             distance_to_gt = None
             success_flag = None
             if gt is not None:
-                distance_to_gt = float(np.linalg.norm(centroid - gt))
+                # Map centroid (cloud frame) into the simulator world frame approximately
+                # via camera-distance scale matching, then translate to the simulator look_at.
+                sim_pose = poses_sim[current]
+                d_world = float(np.linalg.norm(sim_pose.position - sim_pose.look_at))
+                d_cloud = float(np.linalg.norm(poses_cloud[current].position - poses_cloud[current].look_at))
+                scale = d_world / max(d_cloud, 1e-6)
+                centroid_world = sim_pose.look_at + centroid * float(scale)
+                distance_to_gt = float(np.linalg.norm(centroid_world - gt))
                 success_flag = distance_to_gt <= cfg.experiment.success_threshold
 
             if cfg.experiment.policy == "active":
-                next_view, policy_score = select_next_view_active(current, poses, centroid, visited, cfg.policy)
+                # Use cloud-frame poses so centroid and camera live in the same coordinate frame.
+                next_view, policy_score = select_next_view_active(current, poses_cloud, centroid, visited, cfg.policy)
             elif cfg.experiment.policy == "random":
-                next_view = select_next_view_random(current, poses, visited, self.rng)
+                next_view = select_next_view_random(current, poses_cloud, visited, self.rng)
                 policy_score = 0.0
             else:
-                next_view = select_next_view_geometric(current, poses, visited)
+                next_view = select_next_view_geometric(current, poses_cloud, visited)
                 policy_score = 0.0
 
             variance_sum = float(variance_grid.sum())

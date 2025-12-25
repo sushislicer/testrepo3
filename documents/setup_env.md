@@ -25,6 +25,4 @@ Then, test if EGL is working:
 
 
 
-  - export XDG_RUNTIME_DIR=/tmp/xdg; mkdir -p $XDG_RUNTIME_DIR; chmod 700 $XDG_RUNTIME_DIR
-  - export EGL_PLATFORM=surfaceless
-  - export __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json
+Please fix "the semantic channel is effectively dead because its input render is not a coherent 2D depiction of the object", and "
