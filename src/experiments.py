@@ -201,8 +201,8 @@ class ActiveHallucinationRunner:
                     semantic_mask0 = self.segmenter.segment_affordance(semantic_render0, cfg.segmentation.prompt)
 
             variance_grid = compute_variance_field(clouds_aligned, cfg.variance)
-            semantic_grid = accumulate_semantic_weights(clouds_aligned, point_weights, cfg.variance)
-            score_grid = combine_variance_and_semantics(variance_grid, semantic_grid)
+            semantic_stack = accumulate_semantic_weights(clouds_aligned, point_weights, cfg.variance)
+            score_grid = combine_variance_and_semantics(variance_grid, semantic_stack, cfg.variance)
             centroid, _ = extract_topk_centroid(score_grid, grid, cfg.variance.topk_ratio)
 
             # --- Visualization Hooks ---

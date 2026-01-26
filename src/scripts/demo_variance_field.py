@@ -112,7 +112,6 @@ def main() -> None:
     clouds = pointe.generate_point_clouds_from_image(img, prompt=cfg.pointe.prompt, num_seeds=cfg.pointe.num_seeds)
     variance = compute_variance_field(clouds, cfg.variance)
 
-    semantic_grid = np.ones_like(variance)
     if args.use_mask:
         base_pose = generate_orbital_poses(1, cfg.simulator.radius, cfg.simulator.elevation_deg)[0]
         base_cam_to_world = pose_to_matrix(base_pose)
@@ -131,9 +130,11 @@ def main() -> None:
             )
             for pc in clouds
         ]
-        semantic_grid = accumulate_semantic_weights(clouds, point_weights, cfg.variance)
+        semantic_stack = accumulate_semantic_weights(clouds, point_weights, cfg.variance)
+    else:
+        semantic_stack = np.ones((cfg.pointe.num_seeds, *variance.shape), dtype=np.float32)
 
-    score = combine_variance_and_semantics(variance, semantic_grid)
+    score = combine_variance_and_semantics(variance, semantic_stack, cfg.variance)
     out_dir = Path(args.save_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     

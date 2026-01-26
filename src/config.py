@@ -63,6 +63,7 @@ class VarianceConfig:
     min_points_per_voxel: int = 1
     gaussian_sigma: Optional[float] = 1.0  # voxels; helps seed overlap
     topk_ratio: float = 0.05  # fraction of voxels used for centroid
+    semantic_variance_weight: float = 0.0  # weight for secondary signal (Var(Semantics))
 
 
 @dataclass

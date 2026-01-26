@@ -82,32 +82,51 @@ def accumulate_semantic_weights(
     point_weights: List[np.ndarray],
     cfg: VarianceConfig,
 ) -> np.ndarray:
-    """Aggregate per-point semantic weights into a voxel grid using vectorized ops."""
+    """Aggregate per-point semantic weights into a voxel grid stack (N, Res, Res, Res)."""
     grid = VoxelGrid(bounds=cfg.grid_bounds, resolution=cfg.resolution)
-    accum = np.zeros((grid.resolution, grid.resolution, grid.resolution), dtype=np.float32)
-    counts = np.zeros_like(accum)
-
+    
+    semantic_stack = []
+    
     for pc, w in zip(point_clouds, point_weights):
+        # Create grid for this seed
+        seed_accum = np.zeros((grid.resolution, grid.resolution, grid.resolution), dtype=np.float32)
+        seed_counts = np.zeros_like(seed_accum)
+        
         idx, valid = grid.world_to_grid(pc)
         idx = idx[valid]
         w = w[valid]
         
         if idx.size > 0:
-            # Vectorized accumulation for speed (removes Python loop)
-            np.add.at(accum, (idx[:, 0], idx[:, 1], idx[:, 2]), w)
-            np.add.at(counts, (idx[:, 0], idx[:, 1], idx[:, 2]), 1.0)
+            np.add.at(seed_accum, (idx[:, 0], idx[:, 1], idx[:, 2]), w)
+            np.add.at(seed_counts, (idx[:, 0], idx[:, 1], idx[:, 2]), 1.0)
             
-    # Avoid division by zero
-    mask = counts > 0
-    semantic = np.zeros_like(accum)
-    semantic[mask] = accum[mask] / counts[mask]
+        mask = seed_counts > 0
+        seed_grid = np.zeros_like(seed_accum)
+        seed_grid[mask] = seed_accum[mask] / seed_counts[mask]
+        
+        semantic_stack.append(seed_grid)
+        
+    if not semantic_stack:
+        return np.zeros((0, grid.resolution, grid.resolution, grid.resolution), dtype=np.float32)
+
+    return np.stack(semantic_stack, axis=0)
+
+
+def combine_variance_and_semantics(variance: np.ndarray, semantic_stack: np.ndarray, cfg: VarianceConfig) -> np.ndarray:
+    """Combine geometric variance with semantic weights using primary and secondary signals."""
+    # S1: Var(Geometry) * Mean(Semantics)
+    # semantic_stack is (N, V, V, V)
+    if semantic_stack.shape[0] > 0:
+        mean_semantic = semantic_stack.mean(axis=0)
+        s2 = np.var(semantic_stack, axis=0)
+    else:
+        mean_semantic = np.zeros_like(variance)
+        s2 = np.zeros_like(variance)
+        
+    s1 = variance * mean_semantic
     
-    return semantic
-
-
-def combine_variance_and_semantics(variance: np.ndarray, semantic: np.ndarray) -> np.ndarray:
-    """Element-wise multiplication with Min-Max normalization to [0,1]."""
-    scores = variance * semantic
+    # Combined Score
+    scores = s1 + cfg.semantic_variance_weight * s2
     
     min_val = scores.min()
     max_val = scores.max()

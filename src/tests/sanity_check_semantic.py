@@ -188,11 +188,11 @@ def main():
 
     # 4. Fields
     var_grid = compute_variance_field(clouds, cfg.variance)
-    sem_grid = accumulate_semantic_weights(clouds, point_weights_list, cfg.variance)
-    score_grid = combine_variance_and_semantics(var_grid, sem_grid)
+    sem_stack = accumulate_semantic_weights(clouds, point_weights_list, cfg.variance)
+    score_grid = combine_variance_and_semantics(var_grid, sem_stack, cfg.variance)
 
     print(f"\n[Stats] Max Variance: {var_grid.max():.4f}")
-    print(f"[Stats] Max Semantic Grid: {sem_grid.max():.4f}")
+    print(f"[Stats] Max Semantic Stack: {sem_stack.max():.4f}")
     print(f"[Stats] Max Combined Score: {score_grid.max():.4f}")
 
     grid_obj = VoxelGrid(bounds=cfg.variance.grid_bounds, resolution=cfg.variance.resolution)
