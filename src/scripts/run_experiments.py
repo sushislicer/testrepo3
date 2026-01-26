@@ -29,6 +29,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run batch experiments.")
     parser.add_argument("--config", type=str, default=None, help="Path to base YAML config.")
     parser.add_argument("--mesh_glob", type=str, default="assets/*.obj", help="Glob pattern.")
+    parser.add_argument("--mesh_list", type=str, default=None, help="Path to text file with list of meshes (overrides mesh_glob).")
     parser.add_argument("--policies", type=str, default="active,random,geometric", help="Policies list.")
     parser.add_argument("--trials", type=int, default=3, help="Trials per setting.")
     parser.add_argument("--output_dir", type=str, default="outputs/batch_results", help="Output dir.")
@@ -46,7 +47,12 @@ def main() -> None:
     args = parse_args()
     base_cfg = ActiveHallucinationConfig.from_yaml(args.config) if args.config else ActiveHallucinationConfig()
     
-    meshes = resolve_meshes(args.mesh_glob)
+    if args.mesh_list:
+        with open(args.mesh_list, 'r') as f:
+            meshes = [line.strip() for line in f if line.strip()]
+    else:
+        meshes = resolve_meshes(args.mesh_glob)
+    
     policies = [p.strip() for p in args.policies.split(",") if p.strip()]
     
     if not meshes:
@@ -56,6 +62,8 @@ def main() -> None:
     agg_results = defaultdict(lambda: {"vrr": [], "success": []})
     output_root = Path(args.output_dir)
     output_root.mkdir(parents=True, exist_ok=True)
+    # Ensure figure directory exists before plotting at the end.
+    (output_root / "figures").mkdir(parents=True, exist_ok=True)
 
     for mesh_path in meshes:
         mesh_name = Path(mesh_path).stem
@@ -63,7 +71,16 @@ def main() -> None:
             for trial in range(args.trials):
                 cfg = ActiveHallucinationConfig.from_dict(base_cfg.to_dict())
                 cfg.simulator.mesh_path = mesh_path
-                cfg.experiment.policy = policy
+                
+                # Handle combined score policy variant (e.g., "active_combined")
+                actual_policy = policy
+                if policy.endswith("_combined"):
+                    actual_policy = policy.replace("_combined", "")
+                    # Enable combined score if not already set in base config
+                    if cfg.variance.semantic_variance_weight == 0.0:
+                        cfg.variance.semantic_variance_weight = 0.5
+                
+                cfg.experiment.policy = actual_policy
                 cfg.policy.random_seed = base_cfg.policy.random_seed + trial
                 
                 cfg.experiment.output_dir = str(output_root / mesh_name)

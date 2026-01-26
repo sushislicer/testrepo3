@@ -69,8 +69,52 @@ All entrypoints live under `src/scripts/` and can be run via `python -m src.scri
   - How it works: expands `--mesh_glob`, loops over meshes × policies × trials, clones the base config each time, sets `trajectory_name` (and offsets `random_seed` by trial), then calls `ActiveHallucinationRunner.run_episode()` for each run.
   - Example: `python -m src.scripts.run_experiments --mesh_glob 'assets/meshes/*.obj' --policies active,random --trials 3`
 
+- `smoke_test`: quick verification script to ensure the pipeline runs end-to-end on a single object.
+  - Inputs: None (hardcoded to use `assets/meshes/coffee_mug.obj` if present).
+  - Outputs: `outputs/smoke_test/standard` and `outputs/smoke_test/combined`.
+  - How it works: Runs two phases. Phase 1 runs the standard suite (Active S1, Random, Geometric). Phase 2 runs the Combined Score configuration (Active S1+S2) to verify the integration of semantic variance weights.
+  - Example: `python -m src.scripts.smoke_test`
+
+- `run_distributed`: Distributed runner for multi-GPU setups (e.g., 4x A800).
+  - Inputs: `--mesh_glob <glob>`, `--num_gpus <N>`, `--policies <list>`, `--trials <N>`
+  - Outputs: Zipped results in `results_export/results_<timestamp>.zip`.
+  - How it works: Splits the meshes into N chunks and launches `run_experiments` on each GPU in parallel. Automatically archives the results for easy export.
+  - Note: Default policies include `active_combined`, which tests the Active policy with the Combined Score (S1+S2) enabled.
+  - Example: `python -m src.scripts.run_distributed --num_gpus 4`
+
 ## Notes
 
 - Point-E and CLIPSeg weights are downloaded automatically via HuggingFace when first used. Expect GPU to speed up Point-E; CPU will be slow.
 - The pipeline is inference-only; no training loops are included.
 - See `documents/plan.md` for milestone guidance and `documents/project.md` for the research pitch.
+
+## Cluster Usage & Result Export
+
+### Environment
+The code is compatible with the `registry.baidubce.com/inference/aibox-pytorch:v1.0-torch2.5.1-cu12.4` Docker image. Ensure `requirements.txt` dependencies are installed.
+
+### Running Distributed Experiments
+To utilize multiple GPUs (e.g., 4x A800) efficiently:
+
+```bash
+python -m src.scripts.run_distributed --num_gpus 4 --mesh_glob "assets/meshes/*.obj"
+```
+
+This script will:
+1.  Split the meshes across available GPUs.
+2.  Run experiments in parallel.
+3.  Archive the results into `results_export/results_<timestamp>.zip`.
+
+### Exporting Results via Git
+Since the cluster environment may be headless, you can export results by committing the generated zip file:
+
+1.  Run the distributed script (wait for completion).
+2.  Add the generated zip file:
+    ```bash
+    git add results_export/*.zip
+    ```
+3.  Commit and push:
+    ```bash
+    git commit -m "Add experiment results"
+    git push
+    ```

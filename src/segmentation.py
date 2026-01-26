@@ -329,22 +329,3 @@ def compute_point_mask_weights_multiview(
     raise ValueError(f"Unknown aggregation '{aggregation}' (expected: max|mean|sum)")
 
 
-def compute_combined_score(
-    variance_grid: np.ndarray, 
-    semantic_weights: np.ndarray
-) -> np.ndarray:
-    """
-    Compute the final voxel score by combining variance and semantic weights.
-    Formula: Score(v) = Variance(v) * SemanticWeight(v)
-    """
-    raw_scores = variance_grid * semantic_weights
-    
-    # Normalize scores to [0, 1] for easier visualization/thresholding
-    min_val = np.min(raw_scores)
-    max_val = np.max(raw_scores)
-    
-    if max_val - min_val < 1e-6:
-        return np.zeros_like(raw_scores)
-        
-    normalized_scores = (raw_scores - min_val) / (max_val - min_val)
-    return normalized_scores
