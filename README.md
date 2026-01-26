@@ -100,6 +100,34 @@ To utilize multiple GPUs (e.g., 4x A800) efficiently:
 python -m src.scripts.run_distributed --num_gpus 4 --mesh_glob "assets/meshes/*.obj"
 ```
 
+### Obtaining Meshes (required for distributed runs)
+
+The distributed runner expands a mesh glob (default: `assets/meshes/*.obj`) and splits the resulting files across GPUs. Before running on a cluster, ensure you have **at least one mesh** available in your working directory.
+
+#### Option A: Use your own meshes
+1. Create the directory:
+   - `assets/meshes/`
+2. Copy meshes into it (supported by the loader: OBJ/PLY/GLB/STL; the default glob targets OBJ).
+3. Recommended conventions for best results:
+   - Mesh is roughly **centered near the origin** and the base sits on **`z=0`**.
+   - Mesh is **watertight** or reasonably clean (fewer self-intersections helps rendering).
+   - If you use non-OBJ formats, pass a matching glob, e.g.:
+     - `--mesh_glob "assets/meshes/*.ply"`
+
+#### Option B: Download sample meshes from public datasets
+You can populate `assets/meshes/` from common public sources (license-dependent):
+- **Google Scanned Objects (GSO)**: high-quality object scans.
+- **ShapeNet**: large collection of CAD models.
+- **Objaverse / Objaverse-XL**: broad collection of 3D assets.
+
+After downloading, export/convert models to `.obj` (or adjust `--mesh_glob`) and place them under `assets/meshes/`.
+
+#### Quick sanity check
+Run a single-mesh render demo first to verify rendering works in your environment:
+```bash
+python -m src.scripts.demo_orbital_camera --mesh assets/meshes/<your_mesh>.obj
+```
+
 This script will:
 1.  Split the meshes across available GPUs.
 2.  Run experiments in parallel.
