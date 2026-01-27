@@ -9,11 +9,19 @@ from typing import List, Tuple, Optional
 
 import numpy as np
 
-# Monkeypatch collections.Mapping for Python 3.10+ compatibility (needed by older pyrender/networkx)
+# Monkeypatch collections.Mapping/Set for Python 3.10+ compatibility (needed by older pyrender/networkx)
 import collections
 import collections.abc
 if not hasattr(collections, "Mapping"):
     collections.Mapping = collections.abc.Mapping
+if not hasattr(collections, "MutableMapping"):
+    collections.MutableMapping = collections.abc.MutableMapping
+if not hasattr(collections, "Set"):
+    collections.Set = collections.abc.Set
+if not hasattr(collections, "MutableSet"):
+    collections.MutableSet = collections.abc.MutableSet
+if not hasattr(collections, "Iterable"):
+    collections.Iterable = collections.abc.Iterable
 
 # Decoupled Import: Soft-fail if renderer/system libs are missing
 try:

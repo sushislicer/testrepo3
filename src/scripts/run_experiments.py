@@ -7,6 +7,20 @@ import os
 # This prevents Open3D/GLFW from trying to open a window and timing out.
 os.environ["PYOPENGL_PLATFORM"] = "egl"
 
+# Monkeypatch collections for Python 3.10+ compatibility (needed by older pyrender/networkx)
+import collections
+import collections.abc
+if not hasattr(collections, "Mapping"):
+    collections.Mapping = collections.abc.Mapping
+if not hasattr(collections, "MutableMapping"):
+    collections.MutableMapping = collections.abc.MutableMapping
+if not hasattr(collections, "Set"):
+    collections.Set = collections.abc.Set
+if not hasattr(collections, "MutableSet"):
+    collections.MutableSet = collections.abc.MutableSet
+if not hasattr(collections, "Iterable"):
+    collections.Iterable = collections.abc.Iterable
+
 import argparse
 import sys
 from collections import defaultdict

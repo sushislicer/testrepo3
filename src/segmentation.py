@@ -37,11 +37,13 @@ class CLIPSegSegmenter:
     def _init_model(self) -> None:
         try:
             from transformers import CLIPSegProcessor, CLIPSegForImageSegmentation
+            import os
 
-            self.processor = CLIPSegProcessor.from_pretrained(self.cfg.model_name, use_fast=True)
-            self.model = CLIPSegForImageSegmentation.from_pretrained(self.cfg.model_name).to(self.device)
+            model_name = os.environ.get("CLIPSEG_MODEL_PATH", self.cfg.model_name)
+            self.processor = CLIPSegProcessor.from_pretrained(model_name, use_fast=True)
+            self.model = CLIPSegForImageSegmentation.from_pretrained(model_name).to(self.device)
             self.available = True
-            logger.info("Loaded CLIPSeg model on %s", self.device)
+            logger.info("Loaded CLIPSeg model on %s from %s", self.device, model_name)
         except Exception as exc:  # pragma: no cover - optional dependency
             logger.warning("CLIPSeg unavailable (%s). Semantic masking will return zeros.", exc)
             self.available = False
