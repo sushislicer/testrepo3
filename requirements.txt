@@ -1,6 +1,6 @@
-# torch>=2.1.0
-# torchvision>=0.16.0
-# torchaudio>=2.1.0
+torch>=2.1.0
+torchvision>=0.16.0
+torchaudio>=2.1.0
 setuptools>=40.8.0
 wheel
 pyyaml>=6.0.1
