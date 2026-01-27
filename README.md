@@ -4,22 +4,32 @@ Simulation-only pipeline that leverages generative variance (Point-E) plus CLIPS
 
 ## Quickstart
 
-1) Create environment (example):
-```
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
-2) Ensure GPU-enabled PyTorch if available (`python - <<'PY'\nimport torch; print(torch.cuda.is_available())\nPY`).
-3) Put meshes under `assets/`.
-   - This repo already includes 5 mug meshes directly under `assets/` (e.g. `assets/ACE_Coffee_Mug_Kristen_16_oz_cup.obj`).
-   - Legacy/demo meshes may also live under `assets/meshes/`.
-   - Supported by the loader: OBJ/PLY/GLB/STL (the default glob targets OBJ).
-   - The simulator normalizes meshes to sit on the table (base on `z=0`) and centers them in `x/y`.
-4) Run a dry demo (no heavy compute) to verify rendering + imports:
-```
-python -m src.scripts.demo_orbital_camera --mesh assets/meshes/example.obj
-```
+1) **Install System Dependencies** (required for rendering):
+   ```bash
+   apt-get update && apt-get install -y libgl1 libglib2.0-0 libglu1-mesa libegl1 libgles2
+   ```
+
+2) **Create Environment**:
+   ```bash
+   # Ensure you use --system-site-packages if your base image has Torch/CUDA installed
+   python3 -m venv .venv --system-site-packages
+   source .venv/bin/activate
+   pip install -r requirements.txt
+   ```
+   *Note: If you are in China, you may need to manually download Point-E weights and CLIPSeg models due to network blocks. See "Troubleshooting" below.*
+
+3) **Run Distributed Experiment**:
+   ```bash
+   # Example: Run the objaverse subset on 2 GPUs
+   HF_ENDPOINT=https://hf-mirror.com python3 -m src.scripts.run_distributed \
+     --preset objaverse_subset \
+     --num_gpus 2 \
+     --policies active active_combined random geometric \
+     --trials 5
+   ```
+
+4) **Verify Results**:
+   Results are archived in `results_export/`.
 
 ## Layout
 
@@ -107,6 +117,17 @@ All entrypoints live under `src/scripts/` and can be run via `python -m src.scri
 - Point-E and CLIPSeg weights are downloaded automatically via HuggingFace when first used. Expect GPU to speed up Point-E; CPU will be slow.
 - The pipeline is inference-only; no training loops are included.
 - See `documents/plan.md` for milestone guidance and `documents/project.md` for the research pitch.
+
+## Troubleshooting
+
+### Network Issues (China)
+If you encounter timeouts downloading models:
+
+1.  **Point-E**: Manually download `base_40m_textvec.pt` and `upsample_40m.pt` from OpenAI (or mirrors) and place them in `~/.cache/point_e/`.
+2.  **CLIPSeg**: Manually download the model files from `https://hf-mirror.com/CIDAS/clipseg-rd64-refined` and place them in a local folder. Then set `export CLIPSEG_MODEL_PATH=/path/to/folder` before running.
+
+### Rendering Issues
+If you see `ImportError: libGL.so.1` or `Library "GLU" not found`, ensure you installed the system dependencies listed in Quickstart.
 
 ## Cluster Usage & Result Export
 
