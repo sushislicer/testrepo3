@@ -229,65 +229,52 @@ def main() -> None:
     for mesh_path in meshes:
         mesh_name = Path(mesh_path).stem
         
-        # Initialize simulator for this mesh
-        sim_cfg = ActiveHallucinationConfig.from_dict(base_cfg.to_dict())
-        sim_cfg.simulator.mesh_path = mesh_path
-        
-        try:
-            shared_sim = VirtualTabletopSimulator(sim_cfg.simulator)
-        except Exception as e:
-            print(f"Failed to init simulator for {mesh_name}: {e}")
-            continue
+        for policy in policies:
+            for trial in range(args.trials):
+                cfg = ActiveHallucinationConfig.from_dict(base_cfg.to_dict())
+                cfg.simulator.mesh_path = mesh_path
+                
+                # Ensure trial-level randomness is consistent across policies:
+                # - Random policy view selection uses cfg.policy.random_seed.
+                # - Point-E sampling uses cfg.pointe.seed_list when provided.
+                #   Without this, Point-E defaults to deterministic seeds [0..K-1],
+                #   making multiple trials effectively identical.
+                cfg.policy.random_seed = base_cfg.policy.random_seed + trial
+                seed_base = base_cfg.policy.random_seed + trial * 1000
+                cfg.pointe.seed_list = [seed_base + i for i in range(int(cfg.pointe.num_seeds))]
 
-        try:
-            for policy in policies:
-                for trial in range(args.trials):
-                    cfg = ActiveHallucinationConfig.from_dict(base_cfg.to_dict())
-                    cfg.simulator.mesh_path = mesh_path
-                    
-                    # Ensure trial-level randomness is consistent across policies:
-                    # - Random policy view selection uses cfg.policy.random_seed.
-                    # - Point-E sampling uses cfg.pointe.seed_list when provided.
-                    #   Without this, Point-E defaults to deterministic seeds [0..K-1],
-                    #   making multiple trials effectively identical.
-                    cfg.policy.random_seed = base_cfg.policy.random_seed + trial
-                    seed_base = base_cfg.policy.random_seed + trial * 1000
-                    cfg.pointe.seed_list = [seed_base + i for i in range(int(cfg.pointe.num_seeds))]
+                # Handle combined score policy variant (e.g., "active_combined")
+                actual_policy = policy
+                if policy.endswith("_combined"):
+                    actual_policy = policy.replace("_combined", "")
+                    # Enable combined score (S1 + S2) with a fixed weight for consistency.
+                    cfg.variance.semantic_variance_weight = 0.5
+                
+                cfg.experiment.policy = actual_policy
+                
+                cfg.experiment.output_dir = str(output_root / mesh_name)
+                cfg.experiment.trajectory_name = f"{policy}_t{trial}"
+                
+                # Explicitly disable heavy 3D visualization for batch runs if supported
+                if hasattr(cfg.experiment, "visualize"):
+                    cfg.experiment.visualize = False 
 
-                    # Handle combined score policy variant (e.g., "active_combined")
-                    actual_policy = policy
-                    if policy.endswith("_combined"):
-                        actual_policy = policy.replace("_combined", "")
-                        # Enable combined score (S1 + S2) with a fixed weight for consistency.
-                        cfg.variance.semantic_variance_weight = 0.5
-                    
-                    cfg.experiment.policy = actual_policy
-                    
-                    cfg.experiment.output_dir = str(output_root / mesh_name)
-                    cfg.experiment.trajectory_name = f"{policy}_t{trial}"
-                    
-                    # Explicitly disable heavy 3D visualization for batch runs if supported
-                    if hasattr(cfg.experiment, "visualize"):
-                        cfg.experiment.visualize = False 
-
-                    runner = ActiveHallucinationRunner(
-                        cfg, 
-                        sim=shared_sim, 
-                        pointe=shared_pointe, 
-                        segmenter=shared_segmenter
-                    )
-                    try:
-                        result = runner.run_episode()
-                        metrics = result["metrics"]
-                        agg_results[policy]["vrr"].append(metrics["variance_reduction_rate"])
-                        agg_results[policy]["success"].append(1.0 if metrics["success_at_final_step"] else 0.0)
-                        print(f"Finished {mesh_name} | {policy} | T{trial}")
-                    except Exception as e:
-                        print(f"Failed {mesh_name} {policy} T{trial}: {e}")
-                    finally:
-                        runner.close()
-        finally:
-            shared_sim.close()
+                runner = ActiveHallucinationRunner(
+                    cfg, 
+                    sim=None, 
+                    pointe=shared_pointe, 
+                    segmenter=shared_segmenter
+                )
+                try:
+                    result = runner.run_episode()
+                    metrics = result["metrics"]
+                    agg_results[policy]["vrr"].append(metrics["variance_reduction_rate"])
+                    agg_results[policy]["success"].append(1.0 if metrics["success_at_final_step"] else 0.0)
+                    print(f"Finished {mesh_name} | {policy} | T{trial}")
+                except Exception as e:
+                    print(f"Failed {mesh_name} {policy} T{trial}: {e}")
+                finally:
+                    runner.close()
 
     avg_vrr_map = {}
     for policy, data in agg_results.items():
