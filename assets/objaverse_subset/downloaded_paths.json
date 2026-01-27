@@ -1,0 +1,30 @@
+{
+  "mugs": {
+    "e0d4745c293b4f63ab1966dd23240941": "/home/yangc/.objaverse/hf-objaverse-v1/glbs/000-136/e0d4745c293b4f63ab1966dd23240941.glb",
+    "ae7142127dd84ebbbe7762368ace452c": "/home/yangc/.objaverse/hf-objaverse-v1/glbs/000-005/ae7142127dd84ebbbe7762368ace452c.glb",
+    "721c70b175674aad93d742ff8812b512": "/home/yangc/.objaverse/hf-objaverse-v1/glbs/000-093/721c70b175674aad93d742ff8812b512.glb",
+    "3e5b44b8eac24e2dadcc158e7ae421b2": "/home/yangc/.objaverse/hf-objaverse-v1/glbs/000-142/3e5b44b8eac24e2dadcc158e7ae421b2.glb",
+    "1f6a331e21db4f919f6e448bfde3a090": "/home/yangc/.objaverse/hf-objaverse-v1/glbs/000-019/1f6a331e21db4f919f6e448bfde3a090.glb"
+  },
+  "pans": {
+    "9c219d7d26ac47beaa46539a9a4fa8da": "/home/yangc/.objaverse/hf-objaverse-v1/glbs/000-120/9c219d7d26ac47beaa46539a9a4fa8da.glb",
+    "2e8c766fcaa54804b24a345e9fd3a3d6": "/home/yangc/.objaverse/hf-objaverse-v1/glbs/000-150/2e8c766fcaa54804b24a345e9fd3a3d6.glb",
+    "c8c6b9fd04254a6489b3401696f60fc8": "/home/yangc/.objaverse/hf-objaverse-v1/glbs/000-098/c8c6b9fd04254a6489b3401696f60fc8.glb",
+    "7013da139fe14b70abf5742767110aa9": "/home/yangc/.objaverse/hf-objaverse-v1/glbs/000-054/7013da139fe14b70abf5742767110aa9.glb",
+    "c1957e1339bb420b9d2d1a27125caef5": "/home/yangc/.objaverse/hf-objaverse-v1/glbs/000-144/c1957e1339bb420b9d2d1a27125caef5.glb"
+  },
+  "kettles": {
+    "05cf3c841d73467d8c59cdfbfd66229e": "/home/yangc/.objaverse/hf-objaverse-v1/glbs/000-140/05cf3c841d73467d8c59cdfbfd66229e.glb",
+    "21b1445e34ec4d0ab75758779e502137": "/home/yangc/.objaverse/hf-objaverse-v1/glbs/000-061/21b1445e34ec4d0ab75758779e502137.glb",
+    "4b277d86dbde4b538abd74266d0acb73": "/home/yangc/.objaverse/hf-objaverse-v1/glbs/000-098/4b277d86dbde4b538abd74266d0acb73.glb",
+    "da394e8c38a84529a3b98729f1868c67": "/home/yangc/.objaverse/hf-objaverse-v1/glbs/000-025/da394e8c38a84529a3b98729f1868c67.glb",
+    "93c1e467f89f43eaafdfaa6588e92342": "/home/yangc/.objaverse/hf-objaverse-v1/glbs/000-088/93c1e467f89f43eaafdfaa6588e92342.glb"
+  },
+  "hammers": {
+    "bdb663c8be5e43fbb23522e994ae52d4": "/home/yangc/.objaverse/hf-objaverse-v1/glbs/000-085/bdb663c8be5e43fbb23522e994ae52d4.glb",
+    "f6f3eee2d418463bbab1abe93e274d60": "/home/yangc/.objaverse/hf-objaverse-v1/glbs/000-073/f6f3eee2d418463bbab1abe93e274d60.glb",
+    "e1f901eaa02f4165894b355d5947ff38": "/home/yangc/.objaverse/hf-objaverse-v1/glbs/000-139/e1f901eaa02f4165894b355d5947ff38.glb",
+    "fae3562a5e564fd9ab315caf07be5818": "/home/yangc/.objaverse/hf-objaverse-v1/glbs/000-063/fae3562a5e564fd9ab315caf07be5818.glb",
+    "5bdc836016a3444ea140b34d47fee024": "/home/yangc/.objaverse/hf-objaverse-v1/glbs/000-157/5bdc836016a3444ea140b34d47fee024.glb"
+  }
+}

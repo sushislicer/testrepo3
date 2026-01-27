@@ -1,0 +1,5 @@
+/home/yangc/CVProj/main/assets/objaverse_subset/mugs/mug_00.obj
+/home/yangc/CVProj/main/assets/objaverse_subset/mugs/mug_01.obj
+/home/yangc/CVProj/main/assets/objaverse_subset/mugs/mug_02.obj
+/home/yangc/CVProj/main/assets/objaverse_subset/mugs/mug_03.obj
+/home/yangc/CVProj/main/assets/objaverse_subset/mugs/mug_04.obj

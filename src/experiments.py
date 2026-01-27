@@ -247,10 +247,10 @@ class ActiveHallucinationRunner:
             logs.append(
                 StepLog(
                     step=step,
-                    view_id=current,
-                    next_view_id=next_view,
+                    view_id=int(current),
+                    next_view_id=int(next_view),
                     variance_sum=variance_sum,
-                    policy_score=policy_score,
+                    policy_score=float(policy_score),
                     centroid=centroid.tolist(),
                     distance_to_gt=distance_to_gt,
                     success=success_flag,

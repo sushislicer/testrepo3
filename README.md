@@ -11,7 +11,11 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 2) Ensure GPU-enabled PyTorch if available (`python - <<'PY'\nimport torch; print(torch.cuda.is_available())\nPY`).
-3) Place meshes under `assets/meshes/` (OBJ/PLY/GLB/STL). The code assumes objects are centered near the origin with the base on `z=0`.
+3) Put meshes under `assets/`.
+   - This repo already includes 5 mug meshes directly under `assets/` (e.g. `assets/ACE_Coffee_Mug_Kristen_16_oz_cup.obj`).
+   - Legacy/demo meshes may also live under `assets/meshes/`.
+   - Supported by the loader: OBJ/PLY/GLB/STL (the default glob targets OBJ).
+   - The simulator normalizes meshes to sit on the table (base on `z=0`) and centers them in `x/y`.
 4) Run a dry demo (no heavy compute) to verify rendering + imports:
 ```
 python -m src.scripts.demo_orbital_camera --mesh assets/meshes/example.obj
@@ -29,7 +33,7 @@ python -m src.scripts.demo_orbital_camera --mesh assets/meshes/example.obj
   - `experiments.py`: end-to-end loops, metrics, logging.
   - `visualization.py`: overlays, variance heatmaps, trajectory grids.
 - `src/scripts/`: CLI entrypoints for demos and experiments.
-- `assets/meshes/`: place your mesh models here (see `documents/plan.md` for categories).
+- `assets/`: mesh assets (this repo includes 5 mugs at `assets/*.obj`), plus optional subfolders like `assets/meshes/`.
 - `outputs/`: renders, logs, and figures.
 - `configs/`: YAML configs for experiments.
 
@@ -64,10 +68,22 @@ All entrypoints live under `src/scripts/` and can be run via `python -m src.scri
   - Example: `python -m src.scripts.run_single_object_demo --mesh assets/meshes/example.obj --policy active --steps 8`
 
 - `run_experiments`: batch runner over many meshes and policies (useful for quick comparisons).
-  - Inputs: optional `--config <yaml>`, `--mesh_glob <glob>`, `--policies <comma,list>`, `--trials <N>`
+  - Inputs:
+    - `--config <yaml>` (optional)
+    - One of:
+      - `--preset mugs5` (recommended for this repo; runs all OBJ meshes under `assets/` whose filename contains `mug`)
+      - `--mesh_glob <glob>`
+      - `--mesh_list <txt>`
+      - `--objects <comma,categories>` + `--assets_dir <dir>` (category folders)
+    - `--policies ...` (space-separated recommended; comma-separated also supported)
+    - `--trials <N>`
   - Outputs: one trajectory folder per `(mesh, policy, trial)` under the configured output directory
   - How it works: expands `--mesh_glob`, loops over meshes × policies × trials, clones the base config each time, sets `trajectory_name` (and offsets `random_seed` by trial), then calls `ActiveHallucinationRunner.run_episode()` for each run.
-  - Example: `python -m src.scripts.run_experiments --mesh_glob 'assets/meshes/*.obj' --policies active,random --trials 3`
+  - Examples:
+    - Evaluate the 5 mug meshes shipped in this repo:
+      - `python3 -m src.scripts.run_experiments --config configs/main.yaml --preset mugs5 --policies active active_combined random geometric --trials 5`
+    - Run all OBJ meshes under `assets/meshes/`:
+      - `python3 -m src.scripts.run_experiments --mesh_glob 'assets/meshes/**/*.obj' --policies active random geometric --trials 3`
 
 - `smoke_test`: quick verification script to ensure the pipeline runs end-to-end on a single object.
   - Inputs: None (hardcoded to use `assets/meshes/coffee_mug.obj` if present).
@@ -76,11 +92,15 @@ All entrypoints live under `src/scripts/` and can be run via `python -m src.scri
   - Example: `python -m src.scripts.smoke_test`
 
 - `run_distributed`: Distributed runner for multi-GPU setups (e.g., 4x A800).
-  - Inputs: `--mesh_glob <glob>`, `--num_gpus <N>`, `--policies <list>`, `--trials <N>`
+  - Inputs: `--num_gpus <N>`, `--policies ...`, `--trials <N>`, plus one of `--preset/--objects/--mesh_glob`.
   - Outputs: Zipped results in `results_export/results_<timestamp>.zip`.
   - How it works: Splits the meshes into N chunks and launches `run_experiments` on each GPU in parallel. Automatically archives the results for easy export.
   - Note: Default policies include `active_combined`, which tests the Active policy with the Combined Score (S1+S2) enabled.
-  - Example: `python -m src.scripts.run_distributed --num_gpus 4`
+  - Examples:
+    - 4×GPU evaluation on the repo’s 5 mug meshes:
+      - `python3 -m src.scripts.run_distributed --num_gpus 4 --config configs/main.yaml --preset mugs5 --policies active active_combined random geometric --trials 5`
+    - Multi-GPU run over a mesh glob:
+      - `python3 -m src.scripts.run_distributed --num_gpus 4 --mesh_glob "assets/meshes/**/*.obj" --policies active active_combined random geometric --trials 5`
 
 ## Notes
 
@@ -97,16 +117,54 @@ The code is compatible with the `registry.baidubce.com/inference/aibox-pytorch:v
 To utilize multiple GPUs (e.g., 4x A800) efficiently:
 
 ```bash
-python -m src.scripts.run_distributed --num_gpus 4 --mesh_glob "assets/meshes/*.obj"
+# Example: run the 5 mug meshes included in this repo on 4 GPUs
+python3 -m src.scripts.run_distributed --num_gpus 4 --config configs/main.yaml --preset mugs5 \
+  --policies active active_combined random geometric --trials 5
 ```
 
 ### Obtaining Meshes (required for distributed runs)
 
-The distributed runner expands a mesh glob (default: `assets/meshes/*.obj`) and splits the resulting files across GPUs. Before running on a cluster, ensure you have **at least one mesh** available in your working directory.
+The distributed runner expands a mesh selection (via `--preset`, `--objects`, or `--mesh_glob`) and splits the resulting files across GPUs. Before running on a cluster, ensure you have **at least one mesh** available.
+
+#### Option B: Systematically download *real* meshes (Objaverse)
+
+If you want many real-world meshes for categories like **mugs / pans / kettles / hammers**, the most practical route is **Objaverse**.
+
+This repo includes a small helper script that uses the official `objaverse` Python package to:
+- load Objaverse annotations
+- filter objects by simple keyword matching (e.g., “mug”, “kettle”, …)
+- download a bounded number per category into `assets/objaverse/<category>/...`
+- (optional) convert the downloaded assets to `.obj` and normalize them to the simulator convention (centered, base on `z=0`).
+
+1) Install dependencies (in your venv/conda env):
+```bash
+pip install objaverse trimesh
+```
+
+2) Download a small subset into `assets/objaverse/`:
+```bash
+python3 -m src.scripts.download_objaverse_subset \
+  --categories mugs,pans,kettles,hammers \
+  --max_per_category 50 \
+  --out_dir assets/objaverse \
+  --export_obj
+```
+
+3) Run distributed experiments over the downloaded meshes:
+```bash
+python3 -m src.scripts.run_distributed \
+  --num_gpus 4 \
+  --mesh_glob "assets/objaverse/**/*.obj" \
+  --policies active active_combined random geometric \
+  --trials 5
+```
+
+**Important:** Objaverse is a dataset of assets aggregated from multiple sources. Make sure you comply with the dataset terms and the individual asset licenses.
 
 #### Option A: Use your own meshes
-1. Create the directory:
-   - `assets/meshes/`
+1. Create a directory (either is fine):
+   - `assets/` (flat layout)
+   - `assets/meshes/` (subfolder)
 2. Copy meshes into it (supported by the loader: OBJ/PLY/GLB/STL; the default glob targets OBJ).
 3. Recommended conventions for best results:
    - Mesh is roughly **centered near the origin** and the base sits on **`z=0`**.
@@ -120,7 +178,7 @@ You can populate `assets/meshes/` from common public sources (license-dependent)
 - **ShapeNet**: large collection of CAD models.
 - **Objaverse / Objaverse-XL**: broad collection of 3D assets.
 
-After downloading, export/convert models to `.obj` (or adjust `--mesh_glob`) and place them under `assets/meshes/`.
+After downloading, export/convert models to `.obj` (or adjust `--mesh_glob`) and place them under `assets/` (or `assets/meshes/`).
 
 #### Quick sanity check
 Run a single-mesh render demo first to verify rendering works in your environment:

@@ -47,11 +47,38 @@ def _angle_wrap_deg(deg: float) -> float:
 
 
 def compute_object_mask(rgb: np.ndarray, *, threshold: int = 5) -> np.ndarray:
-    """Binary mask of non-background pixels for black background renders."""
+    """Binary object mask from an RGB render.
+
+    Robust to both dark and light backgrounds.
+
+    Why:
+    - The yaw-alignment loop relies on a stable silhouette mask.
+    - A simple `gray > threshold` assumption only works for black backgrounds.
+    - Many users set white backgrounds for nicer figures, which can cause
+      "starfield" misalignment failures.
+
+    Strategy:
+    - Use Otsu threshold on grayscale to separate object vs. background.
+    - If the resulting foreground occupies most of the image, flip it.
+    - Fall back to a simple threshold if Otsu degenerates.
+    """
     if rgb.ndim != 3 or rgb.shape[2] != 3:
         raise ValueError(f"Expected RGB image (H,W,3), got {rgb.shape}")
-    gray = rgb.mean(axis=2)
-    return (gray > float(threshold)).astype(np.uint8)
+
+    gray = rgb.mean(axis=2).astype(np.uint8)
+    try:
+        # Otsu works well for typical solid-background renders.
+        _, m = cv2.threshold(gray, 0, 1, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        mask = m.astype(np.uint8)
+        # If mask covers almost everything, invert (object should be smaller than bg).
+        if float(mask.mean()) > 0.6:
+            mask = (1 - mask).astype(np.uint8)
+        # Degenerate case: fallback.
+        if mask.sum() < 10:
+            mask = (gray > int(threshold)).astype(np.uint8)
+        return mask
+    except Exception:
+        return (gray > int(threshold)).astype(np.uint8)
 
 
 def normalize_clouds_to_bounds(
@@ -216,4 +243,3 @@ def rotate_clouds_yaw(clouds: List[np.ndarray], yaw_deg: float) -> List[np.ndarr
         return []
     R = _rotation_z(float(yaw_deg))
     return [(np.asarray(pc, dtype=np.float32) @ R.T).astype(np.float32) for pc in clouds]
-
