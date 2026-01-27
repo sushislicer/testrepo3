@@ -6,8 +6,7 @@ import os
 # CRITICAL FIX: Set headless rendering backend before importing visualization libs
 # This prevents Open3D/GLFW from trying to open a window and timing out.
 os.environ["PYOPENGL_PLATFORM"] = "egl"
-# Ensure EGL uses surfaceless platform to avoid display dependency and potential conflicts
-os.environ["EGL_PLATFORM"] = "surfaceless"
+# os.environ["EGL_PLATFORM"] = "surfaceless" # Commented out to see if it fixes TypeError
 
 # Monkeypatch collections for Python 3.10+ compatibility (needed by older pyrender/networkx)
 import collections

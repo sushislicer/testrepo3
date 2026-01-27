@@ -27,6 +27,8 @@ if not hasattr(collections, "Iterable"):
 try:
     import trimesh
     import pyrender
+    import OpenGL.GL  # Explicit import to ensure type handlers are registered
+    import ctypes
     _RENDERER_AVAILABLE = True
 except (ImportError, OSError) as e:
     print(f"[Simulator] Rendering libraries missing ({e}). Running in Mock Mode.")
