@@ -9,6 +9,12 @@ from typing import List, Tuple, Optional
 
 import numpy as np
 
+# Monkeypatch collections.Mapping for Python 3.10+ compatibility (needed by older pyrender/networkx)
+import collections
+import collections.abc
+if not hasattr(collections, "Mapping"):
+    collections.Mapping = collections.abc.Mapping
+
 # Decoupled Import: Soft-fail if renderer/system libs are missing
 try:
     import trimesh
