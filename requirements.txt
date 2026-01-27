@@ -23,5 +23,5 @@ accelerate>=0.24.0
 safetensors>=0.4.0
 # git+https://github.com/openai/point-e.git
 # Use mirror for China connectivity if needed:
-git+https://gitclone.com/github.com/openai/CLIP.git
-git+https://gitclone.com/github.com/openai/point-e.git
+# git+https://gitclone.com/github.com/openai/CLIP.git
+# git+https://gitclone.com/github.com/openai/point-e.git
