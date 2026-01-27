@@ -290,6 +290,12 @@ def main():
         env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
         # Headless rendering compatibility on clusters (EGL).
         env.setdefault("PYOPENGL_PLATFORM", "egl")
+        env.setdefault("EGL_PLATFORM", "surfaceless")
+        # On some cluster/VM images with GLVND, EGL may accidentally select Mesa.
+        # Pin the NVIDIA vendor JSON when available to avoid driver mismatches.
+        nvidia_vendor_json = "/usr/share/glvnd/egl_vendor.d/10_nvidia.json"
+        if "__EGL_VENDOR_LIBRARY_FILENAMES" not in env and os.path.exists(nvidia_vendor_json):
+            env["__EGL_VENDOR_LIBRARY_FILENAMES"] = nvidia_vendor_json
         # Reduce CPU over-subscription when launching N workers.
         env.setdefault("OMP_NUM_THREADS", "1")
         env.setdefault("MKL_NUM_THREADS", "1")

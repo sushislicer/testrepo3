@@ -1,4 +1,17 @@
-"""Pyrender-based virtual tabletop simulator with decoupled rendering."""
+"""Pyrender-based virtual tabletop simulator with decoupled rendering.
+
+Notes on robustness
+-------------------
+Some real-world OBJ assets (e.g. Objaverse subset) ship with textures/materials.
+In headless EGL environments, textured uploads can trigger PyOpenGL type-handler
+errors like:
+
+  TypeError: No array-type handler for type _ctypes.type (value: <cparam 'P' ...>)
+
+To make rendering more reliable across clusters/VMs, we aggressively *strip
+textures* and convert visuals to plain vertex/face colors before handing meshes
+to `pyrender`.
+"""
 
 from __future__ import annotations
 
@@ -28,7 +41,6 @@ try:
     import trimesh
     import pyrender
     import OpenGL.GL  # Explicit import to ensure type handlers are registered
-    import ctypes
     _RENDERER_AVAILABLE = True
 except (ImportError, OSError) as e:
     print(f"[Simulator] Rendering libraries missing ({e}). Running in Mock Mode.")
@@ -115,9 +127,37 @@ class VirtualTabletopSimulator:
         path = Path(mesh_path)
         if not path.exists():
             raise FileNotFoundError(f"Mesh not found: {mesh_path}")
-        mesh = trimesh.load_mesh(str(path), force='mesh')
+        # Load as a mesh when possible, but many OBJ files actually become a Scene
+        # (multiple parts/materials). Handle both.
+        #
+        # Important: try to skip materials to avoid creating textures that can
+        # crash in headless EGL environments.
+        try:
+            mesh = trimesh.load_mesh(str(path), force="mesh", skip_materials=True)
+        except TypeError:
+            mesh = trimesh.load_mesh(str(path), force="mesh")
         if isinstance(mesh, trimesh.Scene):
-            mesh = next(iter(mesh.geometry.values()))
+            # Prefer a transform-aware concatenation of all geometry.
+            try:
+                dumped = mesh.dump(concatenate=True)
+                # trimesh may return a Trimesh or a list depending on version.
+                if isinstance(dumped, list):
+                    mesh = trimesh.util.concatenate([g for g in dumped if g is not None])
+                else:
+                    mesh = dumped
+            except Exception:
+                # Fallback: first geometry.
+                mesh = next(iter(mesh.geometry.values()))
+
+        # Strip textures/materials -> colors. This avoids headless EGL + PyOpenGL
+        # failures on some textured assets.
+        try:
+            if hasattr(mesh, "visual") and hasattr(mesh.visual, "to_color"):
+                mesh = mesh.copy()
+                mesh.visual = mesh.visual.to_color()
+        except Exception:
+            # If conversion fails, keep original visual.
+            pass
         
         # Normalize to table
         bounds = mesh.bounds
@@ -168,7 +208,18 @@ class VirtualTabletopSimulator:
             bg_color=np.array(cfg.background_color + [0.0]),
             ambient_light=np.array([cfg.ambient_light] * 3, dtype=np.float32),
         )
-        mesh_node = pyrender.Mesh.from_trimesh(mesh, smooth=False)
+        # Force an untextured material. Even if the input mesh has UVs or
+        # texture references, we prefer a stable plain-shaded render over
+        # a headless texture upload crash.
+        try:
+            material = pyrender.MetallicRoughnessMaterial(
+                baseColorFactor=(0.7, 0.7, 0.7, 1.0),
+                metallicFactor=0.0,
+                roughnessFactor=1.0,
+            )
+        except Exception:
+            material = None
+        mesh_node = pyrender.Mesh.from_trimesh(mesh, smooth=False, material=material)
         scene.add(mesh_node)
         # Key light + fill lights to avoid near-black renders that break cropping.
         key = pyrender.DirectionalLight(color=np.ones(3), intensity=cfg.light_intensity)
@@ -192,7 +243,24 @@ class VirtualTabletopSimulator:
             cam = pyrender.IntrinsicsCamera(fx=intr.fx, fy=intr.fy, cx=intr.cx, cy=intr.cy, znear=0.05, zfar=5.0)
             cam_node = self.scene.add(cam, pose=pose_to_matrix(pose))
             
-            color, depth = self.renderer.render(self.scene, flags=pyrender.RenderFlags.RGBA)
+            try:
+                color, depth = self.renderer.render(self.scene, flags=pyrender.RenderFlags.RGBA)
+            except Exception as e:
+                # Degrade gracefully per-object instead of killing the entire batch.
+                # The caller may still choose to treat the mock outputs as a failure.
+                print(f"[Simulator] Render failed ({e}). Switching to Mock Mode for this run.")
+                try:
+                    self.scene.remove_node(cam_node)
+                except Exception:
+                    pass
+                try:
+                    self.close()
+                except Exception:
+                    pass
+                h, w = self.cfg.intrinsics.height, self.cfg.intrinsics.width
+                mock = np.zeros((h, w, 3), dtype=np.uint8)
+                mock[h//3:2*h//3, w//3:2*w//3] = 100
+                return mock, None
             self.scene.remove_node(cam_node)
             rgb = color[..., :3].astype(np.float32)
 
