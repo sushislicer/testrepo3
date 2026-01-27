@@ -66,11 +66,23 @@ def _ensure_dir(path: Path) -> None:
 class ActiveHallucinationRunner:
     """Runs the Active-Hallucination loop for a single object."""
 
-    def __init__(self, cfg: ActiveHallucinationConfig):
+    def __init__(
+        self, 
+        cfg: ActiveHallucinationConfig, 
+        sim: Optional[VirtualTabletopSimulator] = None,
+        pointe: Optional[PointEGenerator] = None,
+        segmenter: Optional[CLIPSegSegmenter] = None,
+    ):
         self.cfg = cfg
-        self.sim = VirtualTabletopSimulator(cfg.simulator)
-        self.pointe = PointEGenerator(cfg.pointe)
-        self.segmenter = CLIPSegSegmenter(cfg.segmentation)
+        if sim is not None:
+            self.sim = sim
+            self._owns_sim = False
+        else:
+            self.sim = VirtualTabletopSimulator(cfg.simulator)
+            self._owns_sim = True
+
+        self.pointe = pointe if pointe is not None else PointEGenerator(cfg.pointe)
+        self.segmenter = segmenter if segmenter is not None else CLIPSegSegmenter(cfg.segmentation)
         self.rng = np.random.RandomState(cfg.policy.random_seed)
         self._output_root = Path(cfg.experiment.output_dir) / cfg.experiment.trajectory_name
         _ensure_dir(self._output_root)
@@ -287,6 +299,12 @@ class ActiveHallucinationRunner:
         self._save_logs(result)
         self._save_csv(logs, vrr)
         return result
+
+    def close(self) -> None:
+        """Clean up resources."""
+        if self.sim is not None and getattr(self, "_owns_sim", True):
+            self.sim.close()
+        self.sim = None
 
     def _save_logs(self, data: Dict) -> None:
         path = self._output_root / "trajectory.json"

@@ -218,3 +218,9 @@ class VirtualTabletopSimulator:
 
     def get_pose_matrix(self, idx: int) -> np.ndarray:
         return pose_to_matrix(self.poses[idx % len(self.poses)])
+
+    def close(self) -> None:
+        """Clean up renderer resources."""
+        if self.renderer is not None:
+            self.renderer.delete()
+            self.renderer = None
