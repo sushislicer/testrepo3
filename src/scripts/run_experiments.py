@@ -108,7 +108,7 @@ def parse_args() -> argparse.Namespace:
             "How to choose the initial camera view for each (mesh,policy,trial). "
             "fixed: always use --initial_view. "
             "random_per_trial: deterministically sample a different start view per trial using the base random_seed. "
-            "sweep: initial_view = trial % num_views (useful when trials >= num_views). "
+            "sweep: evenly-space initial views across the orbit (e.g., trials=3 -> 0, 8, 16 when num_views=24). "
             "semantic_occluded: pick an initial view from the lowest-visibility semantic views (requires rendering all orbital views once per mesh)."
         ),
     )
@@ -178,6 +178,7 @@ def _choose_initial_view(
     mode: str,
     fixed_view: int,
     trial: int,
+    trials_total: int | None = None,
     num_views: int,
     seed: int,
     view_pool: list[int] | None = None,
@@ -197,7 +198,18 @@ def _choose_initial_view(
     if mode == "fixed":
         return int(fixed_view) % num_views
     if mode == "sweep":
-        return int(pool[int(trial) % len(pool)])
+        # Evenly-space initial views across the orbit.
+        # Example: num_views=24, trials_total=3 -> [0, 8, 16] instead of [0, 1, 2].
+        t = int(trial)
+        T = int(trials_total) if trials_total is not None else 0
+        if T <= 1:
+            return int(pool[0])
+        # If we have more trials than distinct views, fall back to wrapping.
+        if T >= len(pool):
+            return int(pool[t % len(pool)])
+        idx = int(np.floor(t * (len(pool) / float(T))))
+        idx = int(np.clip(idx, 0, len(pool) - 1))
+        return int(pool[idx])
     # mode == "random_per_trial" | "semantic_occluded"
     rng = np.random.RandomState(int(seed) + int(trial) * 10_007)
     return int(rng.choice(pool))
@@ -389,6 +401,7 @@ def main() -> None:
                     mode=str(args.initial_view_mode),
                     fixed_view=int(args.initial_view),
                     trial=int(trial),
+                    trials_total=int(args.trials),
                     num_views=int(base_cfg.simulator.num_views),
                     seed=int(mesh_seed),
                     view_pool=view_pool,
