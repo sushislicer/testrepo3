@@ -26,6 +26,7 @@ if not hasattr(collections, "Iterable"):
 import argparse
 import sys
 import zlib
+from datetime import datetime
 from collections import defaultdict
 from glob import glob
 from pathlib import Path
@@ -95,6 +96,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--trials", type=int, default=3, help="Trials per setting.")
     parser.add_argument("--output_dir", type=str, default="outputs/batch_results", help="Output dir.")
 
+    # Run directory handling.
+    parser.add_argument(
+        "--run_name",
+        type=str,
+        default=None,
+        help=(
+            "Optional run subfolder name created under --output_dir. "
+            "If omitted (default), an auto timestamped folder like run_YYYYMMDD_HHMMSS is used."
+        ),
+    )
+    parser.add_argument(
+        "--no_run_subdir",
+        action="store_true",
+        help="Write results directly into --output_dir (legacy behavior).",
+    )
+
     # View-trajectory diversification.
     # The original code always started at view 0, which makes many trials/policies
     # follow nearly identical trajectories on symmetric objects (e.g., mugs) and
@@ -161,6 +178,26 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=None,
         help="Override cfg.variance.semantic_gamma (if provided).",
+    )
+
+    # Secondary semantic signal (S2) shaping overrides.
+    parser.add_argument(
+        "--semantic_s2_threshold",
+        type=float,
+        default=None,
+        help="Override cfg.variance.semantic_s2_threshold (if provided).",
+    )
+    parser.add_argument(
+        "--semantic_s2_gamma",
+        type=float,
+        default=None,
+        help="Override cfg.variance.semantic_s2_gamma (if provided).",
+    )
+    parser.add_argument(
+        "--semantic_s2_power",
+        type=float,
+        default=None,
+        help="Override cfg.variance.semantic_s2_power (if provided).",
     )
     return parser.parse_args()
 
@@ -340,6 +377,10 @@ def _parse_policies(policies_tokens: list[str]) -> list[str]:
 def main() -> None:
     args = parse_args()
     base_cfg = ActiveHallucinationConfig.from_yaml(args.config) if args.config else ActiveHallucinationConfig()
+
+    # Create a fresh run subdirectory by default to avoid overwriting previous results.
+    # This makes it easier to compare different hyperparameter sweeps.
+    run_name = str(args.run_name) if args.run_name else datetime.now().strftime("run_%Y%m%d_%H%M%S")
     
     if args.mesh_list:
         with open(args.mesh_list, 'r') as f:
@@ -366,6 +407,8 @@ def main() -> None:
 
     agg_results = defaultdict(lambda: {"vrr": [], "vrr_best": [], "success": []})
     output_root = Path(args.output_dir)
+    if not args.no_run_subdir:
+        output_root = output_root / run_name
     output_root.mkdir(parents=True, exist_ok=True)
     # Ensure figure directory exists before plotting at the end.
     (output_root / "figures").mkdir(parents=True, exist_ok=True)
@@ -418,6 +461,12 @@ def main() -> None:
                     cfg.variance.semantic_threshold = float(args.semantic_threshold)
                 if args.semantic_gamma is not None:
                     cfg.variance.semantic_gamma = float(args.semantic_gamma)
+                if args.semantic_s2_threshold is not None:
+                    cfg.variance.semantic_s2_threshold = float(args.semantic_s2_threshold)
+                if args.semantic_s2_gamma is not None:
+                    cfg.variance.semantic_s2_gamma = float(args.semantic_s2_gamma)
+                if args.semantic_s2_power is not None:
+                    cfg.variance.semantic_s2_power = float(args.semantic_s2_power)
                 
                 # Ensure trial-level randomness is consistent across policies:
                 # - Random policy view selection uses cfg.policy.random_seed.

@@ -131,22 +131,35 @@ def combine_variance_and_semantics(variance: np.ndarray, semantic_stack: np.ndar
         mean_semantic = np.zeros_like(variance)
         s2 = np.zeros_like(variance)
 
-    # Focus the score on high-confidence semantic regions.
+    # Focus S1 on high-confidence semantic regions.
     # This helps prevent "square"/bounding-box artifacts from dominating when
     # CLIPSeg produces diffuse low-confidence masks.
-    sem = mean_semantic
-    thr = float(getattr(cfg, "semantic_threshold", 0.0) or 0.0)
-    if thr > 0.0:
-        sem = np.clip((sem - thr) / max(1.0 - thr, 1e-6), 0.0, 1.0)
-    gamma = float(getattr(cfg, "semantic_gamma", 1.0) or 1.0)
-    if abs(gamma - 1.0) > 1e-6:
-        sem = np.power(np.clip(sem, 0.0, 1.0), gamma)
+    sem_s1 = mean_semantic
+    thr1 = float(getattr(cfg, "semantic_threshold", 0.0) or 0.0)
+    if thr1 > 0.0:
+        sem_s1 = np.clip((sem_s1 - thr1) / max(1.0 - thr1, 1e-6), 0.0, 1.0)
+    gamma1 = float(getattr(cfg, "semantic_gamma", 1.0) or 1.0)
+    if abs(gamma1 - 1.0) > 1e-6:
+        sem_s1 = np.power(np.clip(sem_s1, 0.0, 1.0), gamma1)
 
-    s1 = variance * sem
-    
-    # Secondary signal: semantic disagreement across multiview painting.
-    # Gate it by semantic confidence so diffuse mask noise doesn't dominate.
-    s2 = s2 * sem
+    s1 = variance * sem_s1
+
+    # Secondary signal: semantic disagreement across seeds.
+    # Use a *softer* semantic gate than S1 so we don't erase disagreements when
+    # only a subset of seeds predict the affordance (low mean, high variance).
+    sem_s2 = mean_semantic
+    thr2 = float(getattr(cfg, "semantic_s2_threshold", 0.0) or 0.0)
+    if thr2 > 0.0:
+        sem_s2 = np.clip((sem_s2 - thr2) / max(1.0 - thr2, 1e-6), 0.0, 1.0)
+    gamma2 = float(getattr(cfg, "semantic_s2_gamma", 1.0) or 1.0)
+    if abs(gamma2 - 1.0) > 1e-6:
+        sem_s2 = np.power(np.clip(sem_s2, 0.0, 1.0), gamma2)
+
+    s2 = s2 * sem_s2
+    p2 = float(getattr(cfg, "semantic_s2_power", 1.0) or 1.0)
+    # Power < 1 boosts small values (e.g., sqrt).
+    if abs(p2 - 1.0) > 1e-6:
+        s2 = np.power(np.clip(s2, 0.0, None), p2)
 
     # Combined Score
     scores = s1 + cfg.semantic_variance_weight * s2

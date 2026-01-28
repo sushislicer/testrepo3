@@ -265,6 +265,9 @@ def main():
             sys.executable, "-u", "-m", "src.scripts.run_experiments",
             "--mesh_list", str(list_file),
         ]
+        # The distributed runner already creates a unique output_path per run_id.
+        # Avoid nesting another run_YYYY... subfolder inside output_path.
+        cmd += ["--no_run_subdir"]
         if args.config:
             cmd += ["--config", str(args.config)]
         if args.preset:

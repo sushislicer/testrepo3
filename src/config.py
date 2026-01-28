@@ -69,6 +69,18 @@ class VarianceConfig:
     semantic_threshold: float = 0.25
     semantic_gamma: float = 2.0
 
+    # Secondary semantic signal (S2 = Var(Semantics)) shaping.
+    # Motivation:
+    # - In practice, the handle can be predicted in only a subset of seeds/views.
+    # - If we gate S2 with the same hard semantic_threshold as S1, we can zero out
+    #   the very disagreements we want to measure.
+    #
+    # These knobs allow keeping S2 alive at lower mean-semantic confidence and
+    # amplifying small-but-consistent disagreements.
+    semantic_s2_threshold: float = 0.05  # softer gate than semantic_threshold
+    semantic_s2_gamma: float = 1.0
+    semantic_s2_power: float = 0.5  # <1 boosts small values (sqrt by default)
+
 
 @dataclass
 class SegmentationConfig:

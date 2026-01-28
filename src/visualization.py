@@ -169,9 +169,15 @@ def render_fallback_2d(point_clouds: List[np.ndarray], save_path: Optional[str] 
     # Plot clouds
     for idx, pc in enumerate(point_clouds):
         if len(pc) == 0: continue
-        # Subsample for speed
-        if len(pc) > 1000:
-            pc = pc[np.random.choice(len(pc), 1000, replace=False)]
+        # Subsample for speed.
+        # NOTE: This function is often hit on headless machines (no EGL/GL). The
+        # previous hard cap of 1000 points made the debug overlays look "empty"
+        # compared to Open3D renders, which confused interpretation.
+        # Keep a much higher default cap to preserve perceived density.
+        max_points = int(os.environ.get("FALLBACK_RENDER_MAX_POINTS", "8000"))
+        if max_points > 0 and len(pc) > max_points:
+            rng = np.random.RandomState(10_000 + idx)
+            pc = pc[rng.choice(len(pc), max_points, replace=False)]
             
         hue = idx / max(len(point_clouds), 1)
         color = colorsys.hsv_to_rgb(hue, 0.8, 1.0)
@@ -335,7 +341,10 @@ def create_trajectory_figure(steps_data: List[dict], save_path: str) -> None:
         v_grid = step['variance']
         proj = np.max(v_grid, axis=2) if v_grid.ndim == 3 else v_grid
         ax_var.imshow(proj, cmap="inferno")
-        ax_var.set_title(f"Uncertainty: {np.sum(v_grid):.1f}")
+        # Prefer a precomputed uncertainty sum if provided (keeps figures consistent
+        # with what is logged in trajectory.json/trajectory_metrics.csv).
+        unc = float(step.get("uncertainty_sum", np.sum(v_grid)))
+        ax_var.set_title(f"Uncertainty: {unc:.1f}")
         ax_var.axis("off")
 
     plt.tight_layout()

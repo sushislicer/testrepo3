@@ -228,7 +228,13 @@ class ActiveHallucinationRunner:
                 # Collect data for trajectory strip
                 vis_trajectory.append({
                     "rgb": rgb,
-                    "variance": score_grid,  # visualizing combined score for trajectory
+                    # IMPORTANT:
+                    # - Use *raw geometric variance* for the trajectory figure's
+                    #   "Uncertainty" readout, so it matches `variance_sum` in logs.
+                    # - The combined semantic score is already saved separately as
+                    #   step_XX_score.png for debugging.
+                    "variance": variance_grid,
+                    "uncertainty_sum": float(variance_grid.sum()),
                     "step_idx": step
                 })
 
