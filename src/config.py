@@ -64,6 +64,10 @@ class VarianceConfig:
     gaussian_sigma: Optional[float] = 1.0  # voxels; helps seed overlap
     topk_ratio: float = 0.05  # fraction of voxels used for centroid
     semantic_variance_weight: float = 0.0  # weight for secondary signal (Var(Semantics))
+    # When combining variance with semantic weights, suppress low-confidence semantic
+    # mass and optionally sharpen the mask to focus on the affordance region.
+    semantic_threshold: float = 0.25
+    semantic_gamma: float = 2.0
 
 
 @dataclass

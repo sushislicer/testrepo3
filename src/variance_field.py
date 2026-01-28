@@ -60,7 +60,15 @@ def compute_variance_field(point_clouds: List[np.ndarray], cfg: VarianceConfig) 
         
         # Apply blurring to each seed's occupancy to handle point jitter
         if cfg.gaussian_sigma and gaussian_filter is not None:
-            occ_f = gaussian_filter(occ_f, sigma=cfg.gaussian_sigma)
+            # IMPORTANT: use constant padding to avoid boundary reflection artifacts.
+            # SciPy's default mode='reflect' can create a visible "box"/frame in
+            # max-projection figures when occupancy touches grid borders.
+            occ_f = gaussian_filter(
+                occ_f,
+                sigma=cfg.gaussian_sigma,
+                mode="constant",
+                cval=0.0,
+            )
             
         occupancy.append(occ_f)
         
@@ -122,9 +130,24 @@ def combine_variance_and_semantics(variance: np.ndarray, semantic_stack: np.ndar
     else:
         mean_semantic = np.zeros_like(variance)
         s2 = np.zeros_like(variance)
-        
-    s1 = variance * mean_semantic
+
+    # Focus the score on high-confidence semantic regions.
+    # This helps prevent "square"/bounding-box artifacts from dominating when
+    # CLIPSeg produces diffuse low-confidence masks.
+    sem = mean_semantic
+    thr = float(getattr(cfg, "semantic_threshold", 0.0) or 0.0)
+    if thr > 0.0:
+        sem = np.clip((sem - thr) / max(1.0 - thr, 1e-6), 0.0, 1.0)
+    gamma = float(getattr(cfg, "semantic_gamma", 1.0) or 1.0)
+    if abs(gamma - 1.0) > 1e-6:
+        sem = np.power(np.clip(sem, 0.0, 1.0), gamma)
+
+    s1 = variance * sem
     
+    # Secondary signal: semantic disagreement across multiview painting.
+    # Gate it by semantic confidence so diffuse mask noise doesn't dominate.
+    s2 = s2 * sem
+
     # Combined Score
     scores = s1 + cfg.semantic_variance_weight * s2
     

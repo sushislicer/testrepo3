@@ -25,6 +25,7 @@ if not hasattr(collections, "Iterable"):
 
 import argparse
 import sys
+import zlib
 from collections import defaultdict
 from glob import glob
 from pathlib import Path
@@ -102,12 +103,13 @@ def parse_args() -> argparse.Namespace:
         "--initial_view_mode",
         type=str,
         default="random_per_trial",
-        choices=["fixed", "random_per_trial", "sweep"],
+        choices=["fixed", "random_per_trial", "sweep", "semantic_occluded"],
         help=(
             "How to choose the initial camera view for each (mesh,policy,trial). "
             "fixed: always use --initial_view. "
             "random_per_trial: deterministically sample a different start view per trial using the base random_seed. "
-            "sweep: initial_view = trial % num_views (useful when trials >= num_views)."
+            "sweep: initial_view = trial % num_views (useful when trials >= num_views). "
+            "semantic_occluded: pick an initial view from the lowest-visibility semantic views (requires rendering all orbital views once per mesh)."
         ),
     )
     parser.add_argument(
@@ -116,7 +118,59 @@ def parse_args() -> argparse.Namespace:
         default=0,
         help="Initial view index used when --initial_view_mode=fixed.",
     )
+    parser.add_argument(
+        "--initial_view_seed",
+        type=int,
+        default=0,
+        help=(
+            "Extra seed offset for initial view selection. "
+            "Useful to re-sample start views across repeated runs while keeping determinism within a run."
+        ),
+    )
+    parser.add_argument(
+        "--initial_view_occlusion_prompt",
+        type=str,
+        default=None,
+        help="Prompt used for semantic_occluded mode (defaults to cfg.segmentation.prompt).",
+    )
+    parser.add_argument(
+        "--initial_view_occlusion_quantile",
+        type=float,
+        default=0.25,
+        help=(
+            "In semantic_occluded mode, sample from views whose semantic visibility is in the bottom q-quantile. "
+            "Example: 0.25 means bottom 25%% most-occluded views."
+        ),
+    )
+
+    # Combined-score hyperparameters (so you can sweep without editing YAML).
+    parser.add_argument(
+        "--combined_semantic_variance_weight",
+        type=float,
+        default=0.5,
+        help="semantic_variance_weight used for *_combined policies.",
+    )
+    parser.add_argument(
+        "--semantic_threshold",
+        type=float,
+        default=None,
+        help="Override cfg.variance.semantic_threshold (if provided).",
+    )
+    parser.add_argument(
+        "--semantic_gamma",
+        type=float,
+        default=None,
+        help="Override cfg.variance.semantic_gamma (if provided).",
+    )
     return parser.parse_args()
+
+
+def _stable_hash32(text: str) -> int:
+    """Deterministic (process-stable) 32-bit hash for seeding.
+
+    Avoids Python's built-in hash(), which is salted per-process.
+    """
+    return int(zlib.adler32(text.encode("utf-8")) & 0xFFFFFFFF)
 
 
 def _choose_initial_view(
@@ -126,6 +180,7 @@ def _choose_initial_view(
     trial: int,
     num_views: int,
     seed: int,
+    view_pool: list[int] | None = None,
 ) -> int:
     """Deterministically choose an initial view.
 
@@ -133,13 +188,55 @@ def _choose_initial_view(
     (same start view for the same trial index).
     """
     num_views = max(int(num_views), 1)
+    pool = [int(v) % num_views for v in (view_pool or list(range(num_views)))]
+    # De-dup while preserving order.
+    seen = set()
+    pool = [v for v in pool if not (v in seen or seen.add(v))]
+    if not pool:
+        pool = list(range(num_views))
     if mode == "fixed":
         return int(fixed_view) % num_views
     if mode == "sweep":
-        return int(trial) % num_views
-    # mode == "random_per_trial"
+        return int(pool[int(trial) % len(pool)])
+    # mode == "random_per_trial" | "semantic_occluded"
     rng = np.random.RandomState(int(seed) + int(trial) * 10_007)
-    return int(rng.randint(0, num_views))
+    return int(rng.choice(pool))
+
+
+def _compute_semantic_occlusion_pool(
+    *,
+    mesh_path: str,
+    base_cfg: ActiveHallucinationConfig,
+    segmenter: CLIPSegSegmenter,
+    prompt: str,
+    quantile: float,
+) -> list[int]:
+    """Return a list of view indices where the semantic region is least visible.
+
+    This uses CLIPSeg on the *simulator RGB* (not point clouds). It's a cheap proxy
+    for "handle is occluded" and is only used to diversify initial conditions.
+    """
+    q = float(np.clip(quantile, 0.0, 1.0))
+    cfg = ActiveHallucinationConfig.from_dict(base_cfg.to_dict())
+    cfg.simulator.mesh_path = mesh_path
+    sim = VirtualTabletopSimulator(cfg.simulator)
+    try:
+        scores: list[float] = []
+        for view_id in range(int(cfg.simulator.num_views)):
+            rgb, _ = sim.render_view(view_id)
+            mask = segmenter.segment_affordance(rgb, prompt)
+            # Visibility score: fraction of pixels predicted as semantic region.
+            scores.append(float(np.mean(mask > 0.5)))
+        if not scores:
+            return []
+        thr = float(np.quantile(np.asarray(scores, dtype=np.float32), q))
+        pool = [i for i, s in enumerate(scores) if float(s) <= thr + 1e-12]
+        return pool
+    finally:
+        try:
+            sim.close()
+        except Exception:
+            pass
 
 
 def resolve_meshes(glob_pattern: str) -> list[str]:
@@ -269,6 +366,22 @@ def main() -> None:
     for mesh_path in meshes:
         mesh_name = Path(mesh_path).stem
         print(f"\n[Mesh] {mesh_name}: {mesh_path}", flush=True)
+
+        mesh_seed = int(base_cfg.policy.random_seed) + int(args.initial_view_seed) + _stable_hash32(mesh_name)
+
+        # Optional semantic-occlusion pool (computed once per mesh).
+        view_pool: list[int] | None = None
+        if str(args.initial_view_mode) == "semantic_occluded":
+            occl_prompt = args.initial_view_occlusion_prompt or base_cfg.segmentation.prompt
+            view_pool = _compute_semantic_occlusion_pool(
+                mesh_path=str(mesh_path),
+                base_cfg=base_cfg,
+                segmenter=shared_segmenter,
+                prompt=str(occl_prompt),
+                quantile=float(args.initial_view_occlusion_quantile),
+            )
+            if view_pool:
+                print(f"[InitView] semantic_occluded pool size={len(view_pool)}/{int(base_cfg.simulator.num_views)} prompt='{occl_prompt}'", flush=True)
         
         for policy in policies:
             for trial in range(args.trials):
@@ -277,7 +390,8 @@ def main() -> None:
                     fixed_view=int(args.initial_view),
                     trial=int(trial),
                     num_views=int(base_cfg.simulator.num_views),
-                    seed=int(base_cfg.policy.random_seed),
+                    seed=int(mesh_seed),
+                    view_pool=view_pool,
                 )
                 print(
                     f"[Run] Starting {mesh_name} | {policy} | T{trial} | init_view={initial_view}",
@@ -285,6 +399,12 @@ def main() -> None:
                 )
                 cfg = ActiveHallucinationConfig.from_dict(base_cfg.to_dict())
                 cfg.simulator.mesh_path = mesh_path
+
+                # Optional hyperparameter overrides.
+                if args.semantic_threshold is not None:
+                    cfg.variance.semantic_threshold = float(args.semantic_threshold)
+                if args.semantic_gamma is not None:
+                    cfg.variance.semantic_gamma = float(args.semantic_gamma)
                 
                 # Ensure trial-level randomness is consistent across policies:
                 # - Random policy view selection uses cfg.policy.random_seed.
@@ -300,7 +420,7 @@ def main() -> None:
                 if policy.endswith("_combined"):
                     actual_policy = policy.replace("_combined", "")
                     # Enable combined score (S1 + S2) with a fixed weight for consistency.
-                    cfg.variance.semantic_variance_weight = 0.5
+                    cfg.variance.semantic_variance_weight = float(args.combined_semantic_variance_weight)
                 
                 cfg.experiment.policy = actual_policy
                 
