@@ -275,15 +275,21 @@ class ActiveHallucinationRunner:
 
         variance_sums = [log.variance_sum for log in logs]
         vrr = self._compute_vrr(variance_sums)
+        # A monotone alternative that measures the best variance achieved so far.
+        # This is often a better fit for plotting/aggregation because per-view
+        # Point-E generations can be noisy and may temporarily *increase* the
+        # raw variance estimate even if the policy is sensible.
+        vrr_best = self._compute_vrr_best_so_far(variance_sums)
         success_at_k = logs[-1].success if logs else None
         dist_at_k = logs[-1].distance_to_gt if logs else None
 
         # --- Final Visualization ---
         if cfg.experiment.save_debug:
             create_trajectory_figure(vis_trajectory, str(self._output_root / "fig_trajectory.png"))
+            # Plot both raw VRR and the monotone "best-so-far" VRR.
             plot_vrr_curves(
-                {cfg.experiment.policy: variance_sums}, 
-                str(self._output_root / "fig_vrr.png")
+                {"raw": vrr, "best_so_far": vrr_best},
+                str(self._output_root / "fig_vrr.png"),
             )
 
         result = {
@@ -292,12 +298,13 @@ class ActiveHallucinationRunner:
             "metrics": {
                 "variance_sum": variance_sums,
                 "variance_reduction_rate": vrr,
+                "variance_reduction_rate_best_so_far": vrr_best,
                 "success_at_final_step": success_at_k,
                 "distance_to_gt_at_final_step": dist_at_k,
             },
         }
         self._save_logs(result)
-        self._save_csv(logs, vrr)
+        self._save_csv(logs, vrr, vrr_best)
         return result
 
     def close(self) -> None:
@@ -321,7 +328,21 @@ class ActiveHallucinationRunner:
         denom = baseline if baseline > 1e-8 else 1e-8
         return [(baseline - v) / denom for v in variance_sums]
 
-    def _save_csv(self, logs: List[StepLog], vrr: List[float]) -> None:
+    @staticmethod
+    def _compute_vrr_best_so_far(variance_sums: List[float]) -> List[float]:
+        """Monotone VRR based on the best (minimum) variance achieved up to each step."""
+        if not variance_sums:
+            return []
+        baseline = float(variance_sums[0])
+        denom = baseline if baseline > 1e-8 else 1e-8
+        best = float("inf")
+        out: List[float] = []
+        for v in variance_sums:
+            best = min(best, float(v))
+            out.append((baseline - best) / denom)
+        return out
+
+    def _save_csv(self, logs: List[StepLog], vrr: List[float], vrr_best: List[float]) -> None:
         path = self._output_root / "trajectory_metrics.csv"
         import csv
 
@@ -334,6 +355,7 @@ class ActiveHallucinationRunner:
                     "next_view_id",
                     "variance_sum",
                     "variance_reduction_rate",
+                    "variance_reduction_rate_best_so_far",
                     "policy_score",
                     "centroid_x",
                     "centroid_y",
@@ -342,7 +364,7 @@ class ActiveHallucinationRunner:
                     "success",
                 ]
             )
-            for log, vrr_val in zip(logs, vrr):
+            for log, vrr_val, vrr_best_val in zip(logs, vrr, vrr_best):
                 cx, cy, cz = log.centroid
                 writer.writerow(
                     [
@@ -351,6 +373,7 @@ class ActiveHallucinationRunner:
                         log.next_view_id,
                         log.variance_sum,
                         vrr_val,
+                        vrr_best_val,
                         log.policy_score,
                         cx,
                         cy,

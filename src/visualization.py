@@ -345,17 +345,27 @@ def create_trajectory_figure(steps_data: List[dict], save_path: str) -> None:
 
 
 def plot_vrr_curves(results: Dict[str, List[float]], save_path: str) -> None:
-    plt.figure(figsize=(8, 6))
-    for method, variances in results.items():
-        steps = range(len(variances))
-        initial = variances[0] + 1e-8
-        vrr = [v / initial for v in variances]
-        plt.plot(steps, vrr, marker='o', label=method, linewidth=2)
+    """Plot VRR (variance reduction rate) curves.
 
-    plt.title("Variance Reduction Rate")
+    IMPORTANT: `results[method]` is expected to be a per-step VRR series where:
+
+        vrr[t] = (v0 - v[t]) / max(v0, eps)
+
+    so higher is better and the curve should (ideally) trend upward.
+
+    Historical note: an older version of this function mistakenly plotted
+    *normalized variance* (v[t] / v0) while still calling it VRR, which
+    inverted the directionality and made debugging confusing.
+    """
+    plt.figure(figsize=(8, 6))
+    for method, vrr_series in results.items():
+        steps = range(len(vrr_series))
+        plt.plot(steps, vrr_series, marker="o", label=method, linewidth=2)
+
+    plt.title("Variance Reduction Rate (higher is better)")
     plt.xlabel("Step")
-    plt.ylabel("Normalized Variance")
-    plt.grid(True, linestyle='--', alpha=0.6)
+    plt.ylabel("VRR")
+    plt.grid(True, linestyle="--", alpha=0.6)
     plt.legend()
     Path(save_path).parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(save_path, bbox_inches="tight")

@@ -93,7 +93,53 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--trials", type=int, default=3, help="Trials per setting.")
     parser.add_argument("--output_dir", type=str, default="outputs/batch_results", help="Output dir.")
+
+    # View-trajectory diversification.
+    # The original code always started at view 0, which makes many trials/policies
+    # follow nearly identical trajectories on symmetric objects (e.g., mugs) and
+    # yields a poor estimate of VRR "from each angle".
+    parser.add_argument(
+        "--initial_view_mode",
+        type=str,
+        default="random_per_trial",
+        choices=["fixed", "random_per_trial", "sweep"],
+        help=(
+            "How to choose the initial camera view for each (mesh,policy,trial). "
+            "fixed: always use --initial_view. "
+            "random_per_trial: deterministically sample a different start view per trial using the base random_seed. "
+            "sweep: initial_view = trial % num_views (useful when trials >= num_views)."
+        ),
+    )
+    parser.add_argument(
+        "--initial_view",
+        type=int,
+        default=0,
+        help="Initial view index used when --initial_view_mode=fixed.",
+    )
     return parser.parse_args()
+
+
+def _choose_initial_view(
+    *,
+    mode: str,
+    fixed_view: int,
+    trial: int,
+    num_views: int,
+    seed: int,
+) -> int:
+    """Deterministically choose an initial view.
+
+    Determinism is important so that different policies can be compared fairly
+    (same start view for the same trial index).
+    """
+    num_views = max(int(num_views), 1)
+    if mode == "fixed":
+        return int(fixed_view) % num_views
+    if mode == "sweep":
+        return int(trial) % num_views
+    # mode == "random_per_trial"
+    rng = np.random.RandomState(int(seed) + int(trial) * 10_007)
+    return int(rng.randint(0, num_views))
 
 
 def resolve_meshes(glob_pattern: str) -> list[str]:
@@ -209,7 +255,7 @@ def main() -> None:
             print(f"No meshes found: {args.mesh_glob}")
         return
 
-    agg_results = defaultdict(lambda: {"vrr": [], "success": []})
+    agg_results = defaultdict(lambda: {"vrr": [], "vrr_best": [], "success": []})
     output_root = Path(args.output_dir)
     output_root.mkdir(parents=True, exist_ok=True)
     # Ensure figure directory exists before plotting at the end.
@@ -226,7 +272,17 @@ def main() -> None:
         
         for policy in policies:
             for trial in range(args.trials):
-                print(f"[Run] Starting {mesh_name} | {policy} | T{trial}", flush=True)
+                initial_view = _choose_initial_view(
+                    mode=str(args.initial_view_mode),
+                    fixed_view=int(args.initial_view),
+                    trial=int(trial),
+                    num_views=int(base_cfg.simulator.num_views),
+                    seed=int(base_cfg.policy.random_seed),
+                )
+                print(
+                    f"[Run] Starting {mesh_name} | {policy} | T{trial} | init_view={initial_view}",
+                    flush=True,
+                )
                 cfg = ActiveHallucinationConfig.from_dict(base_cfg.to_dict())
                 cfg.simulator.mesh_path = mesh_path
                 
@@ -262,9 +318,12 @@ def main() -> None:
                     segmenter=shared_segmenter
                 )
                 try:
-                    result = runner.run_episode()
+                    result = runner.run_episode(initial_view=int(initial_view))
                     metrics = result["metrics"]
                     agg_results[policy]["vrr"].append(metrics["variance_reduction_rate"])
+                    # Monotone alternative (if available).
+                    if "variance_reduction_rate_best_so_far" in metrics:
+                        agg_results[policy]["vrr_best"].append(metrics["variance_reduction_rate_best_so_far"])
                     agg_results[policy]["success"].append(1.0 if metrics["success_at_final_step"] else 0.0)
                     print(f"[Run] Finished {mesh_name} | {policy} | T{trial}", flush=True)
                 except Exception as e:
@@ -273,6 +332,7 @@ def main() -> None:
                     runner.close()
 
     avg_vrr_map = {}
+    avg_vrr_best_map = {}
     for policy, data in agg_results.items():
         vrrs = data["vrr"]
         if not vrrs: continue
@@ -280,7 +340,18 @@ def main() -> None:
         mat = np.array([v[:min_len] for v in vrrs])
         avg_vrr_map[policy] = np.mean(mat, axis=0).tolist()
 
+        vrrb = data.get("vrr_best") or []
+        if vrrb:
+            min_len_b = min(len(v) for v in vrrb)
+            mat_b = np.array([v[:min_len_b] for v in vrrb])
+            avg_vrr_best_map[policy] = np.mean(mat_b, axis=0).tolist()
+
     plot_vrr_curves(avg_vrr_map, str(output_root / "figures" / "comparison_vrr.png"))
+    if avg_vrr_best_map:
+        plot_vrr_curves(
+            avg_vrr_best_map,
+            str(output_root / "figures" / "comparison_vrr_best_so_far.png"),
+        )
 
     success_map = {}
     for policy, data in agg_results.items():
