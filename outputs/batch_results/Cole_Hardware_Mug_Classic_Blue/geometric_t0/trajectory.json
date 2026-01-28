@@ -8,9 +8,9 @@
       "light_intensity": 3.5,
       "ambient_light": 0.15,
       "background_color": [
-        1.0,
-        1.0,
-        1.0
+        0.0,
+        0.0,
+        0.0
       ],
       "intrinsics": {
         "width": 512,
@@ -30,7 +30,7 @@
       "device": "cuda",
       "num_points": 8192,
       "num_seeds": 5,
-      "guidance_scale": 10,
+      "guidance_scale": 10.0,
       "model_name": "point-e",
       "prompt": "a photo of a mug with a handle",
       "seed_list": [
@@ -54,7 +54,9 @@
       "min_points_per_voxel": 1,
       "gaussian_sigma": 1.0,
       "topk_ratio": 0.05,
-      "semantic_variance_weight": 0.0
+      "semantic_variance_weight": 0.0,
+      "semantic_threshold": 0.25,
+      "semantic_gamma": 2.0
     },
     "segmentation": {
       "prompt": "handle",
@@ -85,42 +87,42 @@
   "steps": [
     {
       "step": 0,
-      "view_id": 6,
-      "next_view_id": 18,
-      "variance_sum": 5679.283203125,
+      "view_id": 0,
+      "next_view_id": 12,
+      "variance_sum": 4774.4951171875,
       "policy_score": 0.0,
       "centroid": [
-        -0.15479403087981616,
-        -0.026803913479217713,
-        0.0022281060674563683
+        -0.47385872554792435,
+        -0.016167073575067067,
+        -4.4741085691903345e-05
       ],
       "distance_to_gt": null,
       "success": null
     },
     {
       "step": 1,
-      "view_id": 18,
-      "next_view_id": 5,
-      "variance_sum": 5893.724609375,
+      "view_id": 12,
+      "next_view_id": 1,
+      "variance_sum": 4718.9111328125,
       "policy_score": 0.0,
       "centroid": [
-        -0.14316464531150777,
-        0.03177017399101777,
-        -0.004771990008138189
+        -0.47382528747335395,
+        -0.015752158875124343,
+        -0.00013257490128703846
       ],
       "distance_to_gt": null,
       "success": null
     },
     {
       "step": 2,
-      "view_id": 5,
-      "next_view_id": 17,
-      "variance_sum": 5793.140625,
+      "view_id": 1,
+      "next_view_id": 13,
+      "variance_sum": 5144.130859375,
       "policy_score": 0.0,
       "centroid": [
-        -0.19158439016487755,
-        -0.00562254159508096,
-        0.0015357966362238946
+        -0.47360346588008123,
+        -0.015830102555987758,
+        -0.0002745689785092102
       ],
       "distance_to_gt": null,
       "success": null
@@ -128,19 +130,19 @@
   ],
   "metrics": {
     "variance_sum": [
-      5679.283203125,
-      5893.724609375,
-      5793.140625
+      4774.4951171875,
+      4718.9111328125,
+      5144.130859375
     ],
     "variance_reduction_rate": [
       0.0,
-      -0.03775853370580368,
-      -0.020047850723899533
+      0.01164185594721955,
+      -0.07741881248487702
     ],
     "variance_reduction_rate_best_so_far": [
       0.0,
-      0.0,
-      0.0
+      0.01164185594721955,
+      0.01164185594721955
     ],
     "success_at_final_step": null,
     "distance_to_gt_at_final_step": null
