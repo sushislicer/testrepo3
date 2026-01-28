@@ -87,6 +87,15 @@ All entrypoints live under `src/scripts/` and can be run via `python -m src.scri
       - `--objects <comma,categories>` + `--assets_dir <dir>` (category folders)
     - `--policies ...` (space-separated recommended; comma-separated also supported)
     - `--trials <N>`
+    - (New) Initial view selection:
+      - `--initial_view_mode fixed|random_per_trial|sweep|semantic_occluded`
+      - `--initial_view <idx>` (used by `fixed`)
+      - `--initial_view_seed <int>` (re-sample initial views across repeated runs)
+      - `--initial_view_occlusion_prompt <text>` (used by `semantic_occluded`, default: segmentation prompt)
+      - `--initial_view_occlusion_quantile <q>` (bottom-q most occluded semantic views; default 0.25)
+    - (New) Combined-score tuning knobs (apply to `*_combined` policies):
+      - `--combined_semantic_variance_weight <float>` (replaces the previous hardcoded 0.5)
+      - `--semantic_threshold <float>` and `--semantic_gamma <float>` (override semantic gating/sharpening)
   - Outputs: one trajectory folder per `(mesh, policy, trial)` under the configured output directory
   - How it works: expands `--mesh_glob`, loops over meshes × policies × trials, clones the base config each time, sets `trajectory_name` (and offsets `random_seed` by trial), then calls `ActiveHallucinationRunner.run_episode()` for each run.
   - Examples:
@@ -94,6 +103,64 @@ All entrypoints live under `src/scripts/` and can be run via `python -m src.scri
       - `python3 -m src.scripts.run_experiments --config configs/main.yaml --preset mugs5 --policies active active_combined random geometric --trials 5`
     - Run all OBJ meshes under `assets/meshes/`:
       - `python3 -m src.scripts.run_experiments --mesh_glob 'assets/meshes/**/*.obj' --policies active random geometric --trials 3`
+
+  ### Recommended usage patterns (new)
+
+  **A) Cover many starting angles fairly (sweep mode)**
+
+  If you want an “average performance over angles”, set trials to the number of orbital views and sweep:
+
+  ```bash
+  python3 -m src.scripts.run_experiments \
+    --preset objaverse_subset \
+    --policies active active_combined random geometric \
+    --trials 24 \
+    --initial_view_mode sweep
+  ```
+
+  **B) Start from occluded-handle views (semantic_occluded mode)**
+
+  This mode renders all orbital views once per mesh, runs CLIPSeg on the simulator RGB frames, and selects initial views from the lowest-visibility semantic views.
+  It’s useful when you explicitly want to test “can the policy recover when the handle starts occluded?”.
+
+  ```bash
+  python3 -m src.scripts.run_experiments \
+    --preset objaverse_subset \
+    --policies active active_combined random geometric \
+    --trials 8 \
+    --initial_view_mode semantic_occluded \
+    --initial_view_occlusion_prompt "handle" \
+    --initial_view_occlusion_quantile 0.25
+  ```
+
+  Re-sample occluded starting views across runs (while staying deterministic within each run):
+
+  ```bash
+  python3 -m src.scripts.run_experiments \
+    --preset objaverse_subset \
+    --policies active active_combined random geometric \
+    --trials 8 \
+    --initial_view_mode semantic_occluded \
+    --initial_view_seed 1
+  ```
+
+  **C) Sweep combined-score hyperparameters from CLI**
+
+  If `active_combined` looks too similar to `active`, try sweeping these:
+
+  ```bash
+  python3 -m src.scripts.run_experiments \
+    --preset objaverse_subset \
+    --policies active active_combined \
+    --trials 8 \
+    --combined_semantic_variance_weight 1.0 \
+    --semantic_threshold 0.30 \
+    --semantic_gamma 3.0
+  ```
+
+  Notes:
+  - Higher `--combined_semantic_variance_weight` increases the influence of semantic disagreement across multiview painting.
+  - `--semantic_threshold` / `--semantic_gamma` make the score focus more on high-confidence semantic regions.
 
 - `smoke_test`: quick verification script to ensure the pipeline runs end-to-end on a single object.
   - Inputs: None (hardcoded to use `assets/meshes/coffee_mug.obj` if present).
