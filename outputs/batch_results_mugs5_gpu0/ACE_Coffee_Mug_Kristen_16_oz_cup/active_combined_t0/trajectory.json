@@ -1,0 +1,143 @@
+{
+  "config": {
+    "simulator": {
+      "radius": 1.2,
+      "elevation_deg": 30.0,
+      "num_views": 24,
+      "mesh_path": "/workspace/testrepo3/assets/ACE_Coffee_Mug_Kristen_16_oz_cup.obj",
+      "light_intensity": 3.5,
+      "ambient_light": 0.15,
+      "background_color": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "intrinsics": {
+        "width": 512,
+        "height": 512,
+        "fx": 575.0,
+        "fy": 575.0,
+        "cx": 256.0,
+        "cy": 256.0
+      },
+      "auto_zoom": true,
+      "target_fill": 0.65,
+      "auto_exposure": true,
+      "exposure_target_mean": 80.0,
+      "exposure_max_gain": 8.0
+    },
+    "pointe": {
+      "device": "cuda",
+      "num_points": 8192,
+      "num_seeds": 5,
+      "guidance_scale": 10.0,
+      "model_name": "point-e",
+      "prompt": "a photo of a mug with a handle",
+      "seed_list": [
+        42,
+        43,
+        44,
+        45,
+        46
+      ],
+      "align_across_seeds": true,
+      "alignment_max_yaw_deg": 30.0,
+      "alignment_yaw_step_deg": 5.0,
+      "alignment_trim_ratio": 0.7,
+      "alignment_core_ratio": 1.0,
+      "alignment_surface_grid": 96,
+      "alignment_max_points": 2048
+    },
+    "variance": {
+      "grid_bounds": 0.5,
+      "resolution": 96,
+      "min_points_per_voxel": 1,
+      "gaussian_sigma": 1.0,
+      "topk_ratio": 0.05,
+      "semantic_variance_weight": 0.5
+    },
+    "segmentation": {
+      "prompt": "handle",
+      "threshold": 0.25,
+      "model_name": "CIDAS/clipseg-rd64-refined",
+      "device": "cuda",
+      "views_per_cloud": 3,
+      "yaw_step_deg": null,
+      "aggregation": "max",
+      "render_point_radius_px": 2,
+      "render_blur_sigma": 0.8
+    },
+    "policy": {
+      "alignment_pow": 1.5,
+      "min_angle_deg": 5.0,
+      "random_seed": 42
+    },
+    "experiment": {
+      "num_steps": 3,
+      "save_debug": true,
+      "output_dir": "outputs/batch_results_mugs5_gpu0/ACE_Coffee_Mug_Kristen_16_oz_cup",
+      "trajectory_name": "active_combined_t0",
+      "policy": "active",
+      "gt_handle_centroid": null,
+      "success_threshold": 0.02
+    }
+  },
+  "steps": [
+    {
+      "step": 0,
+      "view_id": 0,
+      "next_view_id": 22,
+      "variance_sum": 3783.037109375,
+      "policy_score": 0.9941035897018613,
+      "centroid": [
+        -0.2910386431111886,
+        -0.018070218072761258,
+        -0.06465298813937351
+      ],
+      "distance_to_gt": null,
+      "success": null
+    },
+    {
+      "step": 1,
+      "view_id": 22,
+      "next_view_id": 3,
+      "variance_sum": 4109.0810546875,
+      "policy_score": 0.9932061348759427,
+      "centroid": [
+        -0.2543650816078016,
+        -0.007224272462850791,
+        -0.04594226610302324
+      ],
+      "distance_to_gt": null,
+      "success": null
+    },
+    {
+      "step": 2,
+      "view_id": 3,
+      "next_view_id": 21,
+      "variance_sum": 4115.26953125,
+      "policy_score": 0.9931302972850722,
+      "centroid": [
+        -0.2622486963861202,
+        3.649930674863886e-05,
+        -0.03959491891973357
+      ],
+      "distance_to_gt": null,
+      "success": null
+    }
+  ],
+  "metrics": {
+    "variance_sum": [
+      3783.037109375,
+      4109.0810546875,
+      4115.26953125
+    ],
+    "variance_reduction_rate": [
+      0.0,
+      -0.08618576447598372,
+      -0.08782161323548013
+    ],
+    "success_at_final_step": null,
+    "distance_to_gt_at_final_step": null
+  }
+}
