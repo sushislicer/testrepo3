@@ -139,15 +139,9 @@ def resolve_meshes_from_preset(preset: str, assets_root: str) -> list[str]:
         root = PROJECT_ROOT / root
 
     if preset == "mugs5":
-        # Matches files like:
-        #   assets/ACE_Coffee_Mug_*.obj
-        #   assets/meshes/coffee_mug.obj
-        # and any other OBJ whose filename contains 'mug'.
-        out: list[str] = []
-        for p in root.rglob("*.obj"):
-            if "mug" in p.name.lower():
-                out.append(str(p))
-        return sorted(set(out))
+        # Strictly run ONLY the 5 OBJ files shipped at assets/*.obj.
+        # Do not recurse into assets/objaverse_subset or assets/meshes.
+        return sorted(str(p) for p in root.glob("*.obj"))
 
     if preset == "objaverse_subset":
         # Expected path: assets/objaverse_subset/{category}/*.obj
@@ -228,9 +222,11 @@ def main() -> None:
 
     for mesh_path in meshes:
         mesh_name = Path(mesh_path).stem
+        print(f"\n[Mesh] {mesh_name}: {mesh_path}", flush=True)
         
         for policy in policies:
             for trial in range(args.trials):
+                print(f"[Run] Starting {mesh_name} | {policy} | T{trial}", flush=True)
                 cfg = ActiveHallucinationConfig.from_dict(base_cfg.to_dict())
                 cfg.simulator.mesh_path = mesh_path
                 
@@ -270,9 +266,9 @@ def main() -> None:
                     metrics = result["metrics"]
                     agg_results[policy]["vrr"].append(metrics["variance_reduction_rate"])
                     agg_results[policy]["success"].append(1.0 if metrics["success_at_final_step"] else 0.0)
-                    print(f"Finished {mesh_name} | {policy} | T{trial}")
+                    print(f"[Run] Finished {mesh_name} | {policy} | T{trial}", flush=True)
                 except Exception as e:
-                    print(f"Failed {mesh_name} {policy} T{trial}: {e}")
+                    print(f"[Run] Failed {mesh_name} {policy} T{trial}: {e}", flush=True)
                 finally:
                     runner.close()
 

@@ -96,11 +96,10 @@ def resolve_meshes_from_preset(preset: str, assets_root: str) -> list[str]:
         root = PROJECT_ROOT / root
 
     if preset == "mugs5":
-        out: list[str] = []
-        for p in root.rglob("*.obj"):
-            if "mug" in p.name.lower():
-                out.append(str(p))
-        return sorted(set(out))
+        # This preset is intended to run the *5 original OBJ files* shipped in
+        # this repo at assets/*.obj (see README). Keep it strictly non-recursive
+        # so we never accidentally include Objaverse subset assets.
+        return sorted(str(p) for p in root.glob("*.obj"))
 
     if preset == "objaverse_subset":
         # Expected path: assets/objaverse_subset/{category}/*.obj
@@ -260,8 +259,10 @@ def main():
         temp_files.append(list_file)
         
         # Construct command
+        # Use unbuffered output so progress prints appear immediately in the parent
+        # terminal (otherwise it can look "stuck" for long Point-E/CLIPSeg steps).
         cmd = [
-            sys.executable, "-m", "src.scripts.run_experiments",
+            sys.executable, "-u", "-m", "src.scripts.run_experiments",
             "--mesh_list", str(list_file),
         ]
         if args.config:
@@ -296,6 +297,8 @@ def main():
         nvidia_vendor_json = "/usr/share/glvnd/egl_vendor.d/10_nvidia.json"
         if "__EGL_VENDOR_LIBRARY_FILENAMES" not in env and os.path.exists(nvidia_vendor_json):
             env["__EGL_VENDOR_LIBRARY_FILENAMES"] = nvidia_vendor_json
+        # Force unbuffered Python output even if a non-interactive stdout is used.
+        env.setdefault("PYTHONUNBUFFERED", "1")
         # Reduce CPU over-subscription when launching N workers.
         env.setdefault("OMP_NUM_THREADS", "1")
         env.setdefault("MKL_NUM_THREADS", "1")
