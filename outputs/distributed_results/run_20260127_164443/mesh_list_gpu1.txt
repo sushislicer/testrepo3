@@ -1,0 +1,10 @@
+/workspace/testrepo3/assets/objaverse_subset/mugs/mug_00.obj
+/workspace/testrepo3/assets/objaverse_subset/mugs/mug_01.obj
+/workspace/testrepo3/assets/objaverse_subset/mugs/mug_02.obj
+/workspace/testrepo3/assets/objaverse_subset/mugs/mug_03.obj
+/workspace/testrepo3/assets/objaverse_subset/mugs/mug_04.obj
+/workspace/testrepo3/assets/objaverse_subset/pans/pan_00.obj
+/workspace/testrepo3/assets/objaverse_subset/pans/pan_01.obj
+/workspace/testrepo3/assets/objaverse_subset/pans/pan_02.obj
+/workspace/testrepo3/assets/objaverse_subset/pans/pan_03.obj
+/workspace/testrepo3/assets/objaverse_subset/pans/pan_04.obj
