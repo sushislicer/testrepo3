@@ -32,9 +32,11 @@ from .variance_field import (
     accumulate_semantic_weights,
     combine_variance_and_semantics,
     extract_topk_centroid,
+    export_topk_score_points,
 )
 from .nbv_policy import (
     select_next_view_active,
+    select_next_view_active_weighted,
     select_next_view_random,
     select_next_view_geometric,
 )
@@ -55,6 +57,9 @@ class StepLog:
     variance_sum: float
     policy_score: float
     centroid: List[float]
+    # Fraction of simulator RGB pixels predicted as the semantic region (e.g. handle)
+    # in this view. This is a convenient proxy for "did we look at the handle".
+    semantic_visibility: Optional[float] = None
     distance_to_gt: Optional[float] = None
     success: Optional[bool] = None
 
@@ -95,6 +100,7 @@ class ActiveHallucinationRunner:
         *,
         semantic_render: Optional[np.ndarray] = None,
         semantic_mask: Optional[np.ndarray] = None,
+        rgb_semantic_mask: Optional[np.ndarray] = None,
     ) -> None:
         if not self.cfg.experiment.save_debug:
             return
@@ -109,6 +115,12 @@ class ActiveHallucinationRunner:
         if semantic_mask is not None:
             imageio.imwrite(
                 self._output_root / f"step_{step:02d}_cloud0_view0_mask.png", (semantic_mask * 255).astype(np.uint8)
+            )
+
+        if rgb_semantic_mask is not None:
+            imageio.imwrite(
+                self._output_root / f"step_{step:02d}_rgb_semantic_mask.png",
+                (np.asarray(rgb_semantic_mask, dtype=np.float32).clip(0.0, 1.0) * 255).astype(np.uint8),
             )
 
         proj = np.max(score_grid, axis=2)
@@ -137,6 +149,11 @@ class ActiveHallucinationRunner:
 
         for step in range(cfg.experiment.num_steps):
             rgb, _ = self.sim.render_view(current)
+
+            # Semantic visibility on the *simulator RGB* for this view.
+            # This provides an interpretable view-based metric independent of Point-E.
+            rgb_sem_mask = self.segmenter.segment_affordance(rgb, cfg.segmentation.prompt)
+            sem_vis = float(np.mean(rgb_sem_mask > float(cfg.segmentation.threshold)))
 
             clouds = self.pointe.generate_point_clouds_from_image(
                 rgb, prompt=cfg.pointe.prompt, num_seeds=cfg.pointe.num_seeds, seed_list=cfg.pointe.seed_list
@@ -216,6 +233,9 @@ class ActiveHallucinationRunner:
             semantic_stack = accumulate_semantic_weights(clouds_aligned, point_weights, cfg.variance)
             score_grid = combine_variance_and_semantics(variance_grid, semantic_stack, cfg.variance)
             centroid, _ = extract_topk_centroid(score_grid, grid, cfg.variance.topk_ratio)
+            # For *_combined variants, we will also keep the full top-k score set so
+            # NBV can aim at a distribution of high-score voxels, not only a centroid.
+            score_points = export_topk_score_points(score_grid, grid, cfg.variance.topk_ratio)
 
             # --- Visualization Hooks ---
             if cfg.experiment.save_debug:
@@ -253,7 +273,16 @@ class ActiveHallucinationRunner:
 
             if cfg.experiment.policy == "active":
                 # Use cloud-frame poses so centroid and camera live in the same coordinate frame.
-                next_view, policy_score = select_next_view_active(current, poses_cloud, centroid, visited, cfg.policy)
+                # NOTE: For *_combined policies, semantic information is encoded in `score_grid`
+                # via S1 + semantic_variance_weight * S2. A centroid-only target can lose
+                # semantic focus on ring-like score distributions, so when semantic_variance_weight
+                # is enabled we score views against the *distribution* of top-k score voxels.
+                if float(getattr(cfg.variance, "semantic_variance_weight", 0.0) or 0.0) > 1e-9:
+                    next_view, policy_score = select_next_view_active_weighted(
+                        current, poses_cloud, score_points, visited, cfg.policy
+                    )
+                else:
+                    next_view, policy_score = select_next_view_active(current, poses_cloud, centroid, visited, cfg.policy)
             elif cfg.experiment.policy == "random":
                 next_view = select_next_view_random(current, poses_cloud, visited, self.rng)
                 policy_score = 0.0
@@ -270,12 +299,20 @@ class ActiveHallucinationRunner:
                     variance_sum=variance_sum,
                     policy_score=float(policy_score),
                     centroid=centroid.tolist(),
+                    semantic_visibility=sem_vis,
                     distance_to_gt=distance_to_gt,
                     success=success_flag,
                 )
             )
 
-            self._save_debug(step, rgb, score_grid, semantic_render=semantic_render0, semantic_mask=semantic_mask0)
+            self._save_debug(
+                step,
+                rgb,
+                score_grid,
+                semantic_render=semantic_render0,
+                semantic_mask=semantic_mask0,
+                rgb_semantic_mask=rgb_sem_mask,
+            )
             visited.add(next_view)
             current = next_view
 
@@ -286,6 +323,24 @@ class ActiveHallucinationRunner:
         # Point-E generations can be noisy and may temporarily *increase* the
         # raw variance estimate even if the policy is sensible.
         vrr_best = self._compute_vrr_best_so_far(variance_sums)
+
+        semantic_vis = [log.semantic_visibility for log in logs]
+        semantic_best: List[float] = []
+        best = -float("inf")
+        for v in semantic_vis:
+            if v is None:
+                semantic_best.append(float("nan"))
+                continue
+            best = max(best, float(v))
+            semantic_best.append(float(best))
+
+        # Pass@1-style proxy: did the first *chosen* view (step 1) meaningfully
+        # observe the semantic region?
+        # NOTE: This is a proxy based on CLIPSeg on simulator RGB, not ground-truth.
+        sem_pass_thr = 0.01  # fraction of pixels
+        sem_pass_at_1 = None
+        if len(semantic_vis) > 1 and semantic_vis[1] is not None:
+            sem_pass_at_1 = bool(float(semantic_vis[1]) >= sem_pass_thr)
         success_at_k = logs[-1].success if logs else None
         dist_at_k = logs[-1].distance_to_gt if logs else None
 
@@ -312,6 +367,9 @@ class ActiveHallucinationRunner:
                 "variance_sum": variance_sums,
                 "variance_reduction_rate": vrr,
                 "variance_reduction_rate_best_so_far": vrr_best,
+                "semantic_visibility": semantic_vis,
+                "semantic_visibility_best_so_far": semantic_best,
+                "semantic_pass_at_1": sem_pass_at_1,
                 "success_at_final_step": success_at_k,
                 "distance_to_gt_at_final_step": dist_at_k,
             },
@@ -373,6 +431,7 @@ class ActiveHallucinationRunner:
                     "centroid_x",
                     "centroid_y",
                     "centroid_z",
+                    "semantic_visibility",
                     "distance_to_gt",
                     "success",
                 ]
@@ -391,6 +450,7 @@ class ActiveHallucinationRunner:
                         cx,
                         cy,
                         cz,
+                        log.semantic_visibility if log.semantic_visibility is not None else "",
                         log.distance_to_gt if log.distance_to_gt is not None else "",
                         log.success if log.success is not None else "",
                     ]

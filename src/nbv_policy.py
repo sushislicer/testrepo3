@@ -56,6 +56,79 @@ def select_next_view_active(
     return scores[0][1], scores[0][0]
 
 
+def select_next_view_active_weighted(
+    current_idx: int,
+    poses: List[Pose],
+    score_points: np.ndarray,
+    visited: Set[int],
+    cfg: PolicyConfig,
+) -> Tuple[int, float]:
+    """Active NBV using a *distribution* of 3D targets rather than a single centroid.
+
+    `score_points` is expected to be an (N,4) array of [x,y,z,score] in the same
+    coordinate frame as `poses`.
+
+    Rationale:
+    - For *_combined variants, the 3D score field already encodes semantic signal
+      (S1 + w*S2). Collapsing it to a centroid can lose structure (rings/shells).
+    - We score a candidate view by its expected alignment toward many high-score
+      voxels, weighted by their score.
+    """
+
+    pts = np.asarray(score_points, dtype=np.float32)
+    if pts.ndim != 2 or pts.shape[1] != 4 or pts.shape[0] == 0:
+        remaining = [i for i in range(len(poses)) if i not in visited]
+        if not remaining:
+            return current_idx, 0.0
+        return remaining[0], 0.0
+
+    xyz = pts[:, :3]
+    w = np.clip(pts[:, 3], 0.0, None)
+    w_sum = float(w.sum())
+    if w_sum <= 1e-8:
+        w = np.ones_like(w)
+        w_sum = float(w.sum())
+    w = w / w_sum
+
+    # Use a weighted centroid only for the optional min-angle gating.
+    weighted_centroid = (xyz * w[:, None]).sum(axis=0)
+
+    scores: List[Tuple[float, int]] = []
+    pow_ = float(cfg.alignment_pow)
+    min_angle = float(getattr(cfg, "min_angle_deg", 0.0) or 0.0)
+
+    for i, pose in enumerate(poses):
+        if i in visited:
+            continue
+
+        direction = _view_direction(pose)
+        to_centroid = weighted_centroid - pose.position
+        if np.linalg.norm(to_centroid) > 1e-6:
+            align_c = float(np.dot(direction, to_centroid / (np.linalg.norm(to_centroid) + 1e-8)))
+            align_c = float(np.clip(align_c, -1.0, 1.0))
+            angle_c = math.degrees(math.acos(align_c))
+            if min_angle > 0.0 and angle_c < min_angle:
+                continue
+
+        # Score: expected alignment toward score-weighted targets.
+        to = xyz - pose.position[None, :]
+        d = np.linalg.norm(to, axis=1) + 1e-8
+        to_n = to / d[:, None]
+        align = np.sum(to_n * direction[None, :], axis=1)
+        align = np.clip(align, 0.0, 1.0)
+        score = float(np.sum(w * (align ** pow_)))
+        scores.append((score, i))
+
+    if not scores:
+        remaining = [i for i in range(len(poses)) if i not in visited]
+        if not remaining:
+            return current_idx, 0.0
+        return remaining[0], 0.0
+
+    scores.sort(key=lambda x: x[0], reverse=True)
+    return scores[0][1], float(scores[0][0])
+
+
 def select_next_view_random(current_idx: int, poses: List[Pose], visited: Set[int], rng: random.Random) -> int:
     remaining = [i for i in range(len(poses)) if i not in visited]
     if not remaining:

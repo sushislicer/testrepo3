@@ -29,7 +29,17 @@ Simulation-only pipeline that leverages generative variance (Point-E) plus CLIPS
    ```
 
 4) **Verify Results**:
-   Results are archived in `results_export/`.
+    Results are archived in `results_export/`.
+
+5) **Aggregate results into tables (CSV)**:
+   ```bash
+   # Point this at a run folder that contains many <mesh>/<trajectory>/trajectory.json files.
+   python3 -m src.scripts.aggregate_results \
+     --input_dir outputs/batch_results/run_YYYYMMDD_HHMMSS
+   ```
+   This writes:
+   - `figures/summary_runs.csv` (one row per mesh/policy/trial)
+   - `figures/summary_by_policy.csv` (mean/std per policy, plus semantic pass@k)
 
 ## Layout
 
@@ -103,6 +113,44 @@ All entrypoints live under `src/scripts/` and can be run via `python -m src.scri
       - `python3 -m src.scripts.run_experiments --config configs/main.yaml --preset mugs5 --policies active active_combined random geometric --trials 5`
     - Run all OBJ meshes under `assets/meshes/`:
       - `python3 -m src.scripts.run_experiments --mesh_glob 'assets/meshes/**/*.obj' --policies active random geometric --trials 3`
+
+  ### Run output folders (new)
+
+  By default, `run_experiments` now creates a timestamped subfolder under `--output_dir` so repeated runs don't overwrite each other:
+
+  - `--output_dir outputs/batch_results` produces: `outputs/batch_results/run_YYYYMMDD_HHMMSS/...`
+
+  Control this behavior via:
+  - `--run_name <name>`: set a custom run folder name.
+  - `--no_run_subdir`: write directly into `--output_dir` (legacy behavior; used internally by `run_distributed`).
+
+  ### Combined policy semantics (updated)
+
+  `*_combined` enables a **combined 3D score field**:
+
+  - `S1 = Var(Geometry) * Mean(Semantics)`
+  - `S2 = Var(Semantics)` (disagreement across seeds)
+  - `score = S1 + w * S2` via [`combine_variance_and_semantics()`](src/variance_field.py:123)
+
+  In addition, NBV selection for `*_combined` now scores candidate views against the **distribution of top‑k score voxels** (not only a single centroid), so semantic signal can influence NBV more directly:
+  - top‑k voxel extraction with scores: [`export_topk_score_points()`](src/variance_field.py:199)
+  - weighted NBV selection: [`select_next_view_active_weighted()`](src/nbv_policy.py:59)
+
+  #### S2 tuning knobs
+
+  Besides `--combined_semantic_variance_weight`, you can keep S2 alive when mean semantic confidence is low:
+  - `--semantic_s2_threshold` (softer gate than S1)
+  - `--semantic_s2_gamma`
+  - `--semantic_s2_power` (default 0.5 boosts small S2 values)
+
+  #### Semantic visibility + pass@k (new metrics)
+
+  Each step now logs and saves a simple view-based semantic diagnostic:
+  - `semantic_visibility`: fraction of simulator RGB pixels above the CLIPSeg threshold for the affordance prompt.
+  - debug image: `step_XX_rgb_semantic_mask.png`
+  - `semantic_pass_at_1`: pass@1-style proxy (did step 1 exceed a small visibility threshold?)
+
+  These are summarized by [`aggregate_results`](src/scripts/aggregate_results.py:1) into `summary_by_policy.csv`.
 
   ### Recommended usage patterns (new)
 

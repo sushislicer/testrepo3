@@ -196,6 +196,31 @@ def extract_topk_centroid(score_grid: np.ndarray, grid: VoxelGrid, topk_ratio: f
     return centroid, centers
 
 
+def export_topk_score_points(score_grid: np.ndarray, grid: VoxelGrid, topk_ratio: float) -> np.ndarray:
+    """Return (N,4) array of top-k voxels as [x,y,z,score] in world coordinates.
+
+    This is similar to [`extract_topk_centroid()`](src/variance_field.py:178) but also
+    returns each selected voxel's score so callers can do weighted view scoring.
+    """
+    flat = score_grid.ravel()
+    k = max(1, int(topk_ratio * flat.shape[0]))
+
+    if flat.size == 0:
+        return np.zeros((0, 4), dtype=np.float32)
+
+    if k < flat.shape[0]:
+        topk_idx = np.argpartition(-flat, k)[:k]
+    else:
+        topk_idx = np.arange(flat.shape[0])
+
+    coords_idx = np.column_stack(np.unravel_index(topk_idx, score_grid.shape))
+    centers = grid.grid_to_world(coords_idx).astype(np.float32)
+    scores = flat[topk_idx].astype(np.float32)
+    if centers.size == 0:
+        return np.zeros((0, 4), dtype=np.float32)
+    return np.concatenate([centers, scores[:, None]], axis=1)
+
+
 def export_score_points(score_grid: np.ndarray, grid: VoxelGrid, threshold: float = 0.1) -> np.ndarray:
     """Convert voxels above threshold into point coordinates with scores as attributes."""
     mask = score_grid >= threshold
