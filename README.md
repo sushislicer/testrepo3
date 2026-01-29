@@ -82,10 +82,18 @@ All entrypoints live under `src/scripts/` and can be run via `python -m src.scri
   - Example: `python -m src.scripts.demo_variance_field --image path/to/image.png --use_mask`
 
 - `run_single_object_demo`: run one complete Active-Hallucination “episode” (NBV loop) for a single mesh and log results.
-  - Inputs: `--mesh <path>`, optional `--config <yaml>`, `--policy active|random|geometric`, `--steps <N>`, `--initial_view <idx>`, `--output <dir>`
-  - Outputs: per-step renders/figures/logs under `cfg.experiment.output_dir/cfg.experiment.trajectory_name` (defaults are set in `src/config.py`)
-  - How it works: loads a base config (optionally from YAML), applies CLI overrides, then runs `ActiveHallucinationRunner.run_episode(...)` which iterates for `num_steps`: render a view, run Point-E multi-seed generation, multiview-render each Point‑E generation and run CLIPSeg to paint affordance weights in 3D, compute the variance×semantic score volume, select the next view using the chosen policy, and log artifacts to the trajectory folder.
-  - Example: `python -m src.scripts.run_single_object_demo --mesh assets/meshes/example.obj --policy active --steps 8`
+  - This script now supports *run_experiments-like* options: multiple policies, multiple trials, and initial-view selection modes.
+  - Inputs:
+    - `--mesh <path>` (required), optional `--config <yaml>`
+    - `--policies ...` (e.g. `active active_combined random geometric`)
+    - `--trials <N>`
+    - `--initial_view_mode fixed|random_per_trial|sweep|semantic_occluded` (+ related flags)
+    - Combined-score knobs: `--combined_semantic_variance_weight`, `--semantic_threshold`, `--semantic_gamma`, `--semantic_s2_*`
+    - Output: `--output_dir`, optional `--run_name`, `--no_run_subdir`
+  - Outputs: one trajectory folder per `(policy, trial)` under:
+    - `--output_dir/run_YYYYMMDD_HHMMSS/<mesh_name>/<policy>_t<trial>/...` (default)
+  - Example (your requested style):
+    - `python3 -m src.scripts.run_single_object_demo --mesh assets/ACE_Coffee_Mug_Kristen_16_oz_cup.obj --policies active_combined --trials 3 --initial_view_mode sweep --semantic_s2_power 0.5`
 
 - `run_experiments`: batch runner over many meshes and policies (useful for quick comparisons).
   - Inputs:
