@@ -1,0 +1,153 @@
+{
+  "config": {
+    "simulator": {
+      "radius": 1.2,
+      "elevation_deg": 30.0,
+      "num_views": 24,
+      "mesh_path": "/workspace/testrepo3/assets/ACE_Coffee_Mug_Kristen_16_oz_cup.obj",
+      "light_intensity": 3.5,
+      "ambient_light": 0.15,
+      "background_color": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "intrinsics": {
+        "width": 512,
+        "height": 512,
+        "fx": 575.0,
+        "fy": 575.0,
+        "cx": 256.0,
+        "cy": 256.0
+      },
+      "auto_zoom": true,
+      "target_fill": 0.65,
+      "auto_exposure": true,
+      "exposure_target_mean": 80.0,
+      "exposure_max_gain": 8.0
+    },
+    "pointe": {
+      "device": "cuda",
+      "num_points": 8192,
+      "num_seeds": 5,
+      "guidance_scale": 10.0,
+      "model_name": "point-e",
+      "prompt": "a photo of a mug with a handle",
+      "seed_list": [
+        42,
+        43,
+        44,
+        45,
+        46
+      ],
+      "align_across_seeds": true,
+      "alignment_max_yaw_deg": 30.0,
+      "alignment_yaw_step_deg": 5.0,
+      "alignment_trim_ratio": 0.7,
+      "alignment_core_ratio": 1.0,
+      "alignment_surface_grid": 96,
+      "alignment_max_points": 2048
+    },
+    "variance": {
+      "grid_bounds": 0.5,
+      "resolution": 96,
+      "min_points_per_voxel": 1,
+      "gaussian_sigma": 1.0,
+      "topk_ratio": 0.05,
+      "semantic_variance_weight": 0.0,
+      "semantic_threshold": 0.25,
+      "semantic_gamma": 2.0,
+      "semantic_s2_threshold": 0.05,
+      "semantic_s2_gamma": 1.0,
+      "semantic_s2_power": 0.5
+    },
+    "segmentation": {
+      "prompt": "handle",
+      "threshold": 0.25,
+      "model_name": "CIDAS/clipseg-rd64-refined",
+      "device": "cuda",
+      "views_per_cloud": 3,
+      "yaw_step_deg": null,
+      "aggregation": "max",
+      "render_point_radius_px": 2,
+      "render_blur_sigma": 0.8
+    },
+    "policy": {
+      "alignment_pow": 1.5,
+      "min_angle_deg": 5.0,
+      "random_seed": 42
+    },
+    "experiment": {
+      "num_steps": 3,
+      "save_debug": true,
+      "output_dir": "outputs/batch_results/run_20260128_190351/ACE_Coffee_Mug_Kristen_16_oz_cup",
+      "trajectory_name": "random_t0",
+      "policy": "random",
+      "gt_handle_centroid": null,
+      "success_threshold": 0.02
+    }
+  },
+  "steps": [
+    {
+      "step": 0,
+      "view_id": 0,
+      "next_view_id": 7,
+      "variance_sum": 3810.75439453125,
+      "policy_score": 0.0,
+      "centroid": [
+        -0.4713122513338481,
+        -0.013106312354944697,
+        -0.0011456072731108886
+      ],
+      "distance_to_gt": null,
+      "success": null
+    },
+    {
+      "step": 1,
+      "view_id": 7,
+      "next_view_id": 21,
+      "variance_sum": 4222.3544921875,
+      "policy_score": 0.0,
+      "centroid": [
+        -0.47309341750319117,
+        -0.014891952632847982,
+        -0.0009442723874973632
+      ],
+      "distance_to_gt": null,
+      "success": null
+    },
+    {
+      "step": 2,
+      "view_id": 21,
+      "next_view_id": 16,
+      "variance_sum": 4139.876953125,
+      "policy_score": 0.0,
+      "centroid": [
+        -0.4734400431776063,
+        -0.015851060222443272,
+        -0.0007836754378032977
+      ],
+      "distance_to_gt": null,
+      "success": null
+    }
+  ],
+  "metrics": {
+    "variance_sum": [
+      3810.75439453125,
+      4222.3544921875,
+      4139.876953125
+    ],
+    "variance_reduction_rate": [
+      0.0,
+      -0.1080101352758211,
+      -0.08636677269625885
+    ],
+    "variance_reduction_rate_best_so_far": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "success_at_final_step": null,
+    "distance_to_gt_at_final_step": null
+  }
+}

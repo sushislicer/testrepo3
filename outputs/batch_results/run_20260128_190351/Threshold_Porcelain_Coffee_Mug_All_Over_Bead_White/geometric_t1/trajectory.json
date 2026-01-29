@@ -1,0 +1,153 @@
+{
+  "config": {
+    "simulator": {
+      "radius": 1.2,
+      "elevation_deg": 30.0,
+      "num_views": 24,
+      "mesh_path": "/workspace/testrepo3/assets/Threshold_Porcelain_Coffee_Mug_All_Over_Bead_White.obj",
+      "light_intensity": 3.5,
+      "ambient_light": 0.15,
+      "background_color": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "intrinsics": {
+        "width": 512,
+        "height": 512,
+        "fx": 575.0,
+        "fy": 575.0,
+        "cx": 256.0,
+        "cy": 256.0
+      },
+      "auto_zoom": true,
+      "target_fill": 0.65,
+      "auto_exposure": true,
+      "exposure_target_mean": 80.0,
+      "exposure_max_gain": 8.0
+    },
+    "pointe": {
+      "device": "cuda",
+      "num_points": 8192,
+      "num_seeds": 5,
+      "guidance_scale": 10.0,
+      "model_name": "point-e",
+      "prompt": "a photo of a mug with a handle",
+      "seed_list": [
+        1042,
+        1043,
+        1044,
+        1045,
+        1046
+      ],
+      "align_across_seeds": true,
+      "alignment_max_yaw_deg": 30.0,
+      "alignment_yaw_step_deg": 5.0,
+      "alignment_trim_ratio": 0.7,
+      "alignment_core_ratio": 1.0,
+      "alignment_surface_grid": 96,
+      "alignment_max_points": 2048
+    },
+    "variance": {
+      "grid_bounds": 0.5,
+      "resolution": 96,
+      "min_points_per_voxel": 1,
+      "gaussian_sigma": 1.0,
+      "topk_ratio": 0.05,
+      "semantic_variance_weight": 0.0,
+      "semantic_threshold": 0.25,
+      "semantic_gamma": 2.0,
+      "semantic_s2_threshold": 0.05,
+      "semantic_s2_gamma": 1.0,
+      "semantic_s2_power": 0.5
+    },
+    "segmentation": {
+      "prompt": "handle",
+      "threshold": 0.25,
+      "model_name": "CIDAS/clipseg-rd64-refined",
+      "device": "cuda",
+      "views_per_cloud": 3,
+      "yaw_step_deg": null,
+      "aggregation": "max",
+      "render_point_radius_px": 2,
+      "render_blur_sigma": 0.8
+    },
+    "policy": {
+      "alignment_pow": 1.5,
+      "min_angle_deg": 5.0,
+      "random_seed": 43
+    },
+    "experiment": {
+      "num_steps": 3,
+      "save_debug": true,
+      "output_dir": "outputs/batch_results/run_20260128_190351/Threshold_Porcelain_Coffee_Mug_All_Over_Bead_White",
+      "trajectory_name": "geometric_t1",
+      "policy": "geometric",
+      "gt_handle_centroid": null,
+      "success_threshold": 0.02
+    }
+  },
+  "steps": [
+    {
+      "step": 0,
+      "view_id": 8,
+      "next_view_id": 20,
+      "variance_sum": 3845.22509765625,
+      "policy_score": 0.0,
+      "centroid": [
+        -0.47411092398358795,
+        -0.01595467115772977,
+        0.00011491394640865659
+      ],
+      "distance_to_gt": null,
+      "success": null
+    },
+    {
+      "step": 1,
+      "view_id": 20,
+      "next_view_id": 7,
+      "variance_sum": 3826.126708984375,
+      "policy_score": 0.0,
+      "centroid": [
+        -0.4739736394943336,
+        -0.015993525258462208,
+        2.4725336829731436e-05
+      ],
+      "distance_to_gt": null,
+      "success": null
+    },
+    {
+      "step": 2,
+      "view_id": 7,
+      "next_view_id": 19,
+      "variance_sum": 3640.8798828125,
+      "policy_score": 0.0,
+      "centroid": [
+        -0.47400966784228526,
+        -0.01605168866986167,
+        -4.474108569207972e-06
+      ],
+      "distance_to_gt": null,
+      "success": null
+    }
+  ],
+  "metrics": {
+    "variance_sum": [
+      3845.22509765625,
+      3826.126708984375,
+      3640.8798828125
+    ],
+    "variance_reduction_rate": [
+      0.0,
+      0.004966780406045901,
+      0.053142588445160975
+    ],
+    "variance_reduction_rate_best_so_far": [
+      0.0,
+      0.004966780406045901,
+      0.053142588445160975
+    ],
+    "success_at_final_step": null,
+    "distance_to_gt_at_final_step": null
+  }
+}
