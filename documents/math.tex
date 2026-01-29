@@ -1,0 +1,659 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,mathtools}
+\usepackage{bm}
+\usepackage{hyperref}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\T}{\mathsf{T}}
+\newcommand{\norm}[1]{\left\lVert #1\right\rVert}
+\newcommand{\abs}[1]{\left\lvert #1\right\rvert}
+\newcommand{\clip}[3]{\operatorname{clip}\!\left(#1,\,#2,\,#3\right)}
+\newcommand{\argmax}{\operatorname*{arg\,max}}
+\newcommand{\argmin}{\operatorname*{arg\,min}}
+\newcommand{\IoU}{\operatorname{IoU}}
+
+\title{Math Dump: \texttt{pku-25fall-cv-active-hallucination}}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+\tableofcontents
+
+\section{Global Notation}
+\subsection{Geometry and point clouds}
+\begin{itemize}
+  \item A point is $p \in \R^3$ with coordinates $p = (x,y,z)^\T$.
+  \item A point cloud is a finite set (or list) $P = \{p_n\}_{n=1}^{N}$ with $p_n \in \R^3$.
+  \item A set of $K$ Point-E hypotheses is $\{P_i\}_{i=1}^{K}$.
+  \item For any vector $v \in \R^d$, $\norm{v} = \sqrt{\sum_j v_j^2}$.
+\end{itemize}
+
+\subsection{Cameras}
+\begin{itemize}
+  \item Camera intrinsics $(f_x,f_y,c_x,c_y)$ map camera coordinates $(X_c,Y_c,Z_c)$ to pixels $(u,v)$.
+  \item This repo uses an OpenGL-style camera convention: the camera looks down the $-Z$ axis in camera space, so points in front satisfy $Z_c < 0$ and \emph{positive} depth is $d = -Z_c > 0$.
+\end{itemize}
+
+\subsection{Rotations about world $Z$}
+The shared in-repo rotation about $+Z$ by yaw angle $\theta$ (degrees) is
+\[
+R_z(\theta)=
+\begin{bmatrix}
+\cos\theta & -\sin\theta & 0\\
+\sin\theta & \cos\theta & 0\\
+0&0&1
+\end{bmatrix}
+,\qquad \theta \text{ interpreted in radians inside }\cos,\sin.
+\]
+
+\section{Math in \texttt{documents/project.md}}
+The proposal document explicitly defines:
+\subsection{Stochastic hypotheses}
+Input: image $I_{\mathrm{rgb}}$ and prompt. Output: $K$ point clouds $\{P_1,\dots,P_K\}$.
+
+\subsection{Voxel occupancy variance}
+Let $O_i(v)\in\{0,1\}$ be the occupancy of voxel $v$ for hypothesis $i$, and let
+$\bar O(v)=\frac{1}{K}\sum_{i=1}^K O_i(v)$. The document’s variance is:
+\[
+\sigma^2(v)=\frac{1}{K}\sum_{i=1}^K\bigl(O_i(v)-\bar O(v)\bigr)^2.
+\]
+
+\subsection{Semantic weighting and final score}
+With a per-voxel semantic weight $\mathrm{SemanticWeight}(v)$, the score is:
+\[
+\mathrm{Score}(v)=\sigma^2(v)\cdot \mathrm{SemanticWeight}(v).
+\]
+
+\subsection{Centroid and NBV}
+Centroid of high-scoring voxels is denoted $C_{\mathrm{target}}$. The camera moves by an orbital yaw increment $\theta$ (e.g.\ $30^\circ$) toward $C_{\mathrm{target}}$. A stopping threshold is denoted $\tau$.
+
+\section{Math in \texttt{src/variance\_field.py}}
+\subsection{\texttt{VoxelGrid}: bounds, resolution, and voxel size}
+The cubic grid has half-extent $B>0$ (\texttt{grid\_bounds}) and resolution $R\in\mathbb{N}$ (\texttt{resolution}).
+The voxel edge length is:
+\[
+s=\frac{2B}{R}.
+\]
+
+\subsection{\texttt{world\_to\_grid} mapping}
+For a world point $p\in\R^3$:
+\[
+c=\frac{p + (B,B,B)^\T}{2B}\in \R^3,\qquad
+i=\left\lfloor c\cdot R\right\rfloor \in \mathbb{Z}^3.
+\]
+Validity is the indicator
+\[
+\mathrm{valid}(i)=\mathbf{1}\{0\le i_x,i_y,i_z \le R-1\}.
+\]
+
+\subsection{\texttt{grid\_to\_world} voxel centers}
+For an index $i\in\{0,\dots,R-1\}^3$, the corresponding voxel center is:
+\[
+p(i)=\left(i+\tfrac12\bm{1}\right)s-(B,B,B)^\T.
+\]
+
+\subsection{Occupancy grid construction}
+For a point cloud $P=\{p_n\}_{n=1}^N$, define the boolean occupancy tensor
+$O\in\{0,1\}^{R\times R\times R}$:
+\[
+O[i_x,i_y,i_z]=\mathbf{1}\{\exists n:\ \mathrm{world\_to\_grid}(p_n)=i\}.
+\]
+
+\subsection{\texttt{compute\_variance\_field}: blurred Bernoulli variance}
+Each hypothesis $i$ yields occupancy $O_i$. The implementation optionally applies a Gaussian blur (when available) to each occupancy:
+\[
+\tilde O_i = G_\sigma * O_i,\qquad \tilde O_i \in [0,1]^{R\times R\times R}.
+\]
+It then computes the mean occupancy
+\[
+\mu(v)=\frac{1}{K}\sum_{i=1}^K \tilde O_i(v),
+\]
+and uses the Bernoulli variance proxy
+\[
+\mathrm{Var}(v)=\mu(v)\bigl(1-\mu(v)\bigr).
+\]
+
+\subsection{\texttt{accumulate\_semantic\_weights}: per-voxel average}
+Given per-point weights $w_{i,n}\in\R$ for each hypothesis $i$, the voxel accumulators are:
+\[
+A(v)=\sum_{i=1}^K \sum_{n:\,p_{i,n}\mapsto v} w_{i,n},\qquad
+C(v)=\sum_{i=1}^K \sum_{n:\,p_{i,n}\mapsto v} 1.
+\]
+The semantic grid is the per-voxel mean (with $0$ when $C(v)=0$):
+\[
+S(v)=
+\begin{cases}
+\frac{A(v)}{C(v)} & C(v)>0\\
+0 & C(v)=0.
+\end{cases}
+\]
+
+\subsection{\texttt{combine\_variance\_and\_semantics}: product + min--max normalization}
+Raw score:
+\[
+Q(v)=\mathrm{Var}(v)\cdot S(v).
+\]
+Min--max normalization to $[0,1]$:
+\[
+Q_{\mathrm{norm}}(v)=
+\begin{cases}
+\dfrac{Q(v)-\min_{v'}Q(v')}{\max_{v'}Q(v')-\min_{v'}Q(v')} & \max Q-\min Q > 10^{-8}\\
+0 & \text{otherwise}.
+\end{cases}
+\]
+
+\subsection{\texttt{extract\_topk\_centroid}: top-$k$ voxel centroid}
+Let $M=R^3$ be the number of voxels and let $k=\max\{1,\lfloor\rho M\rfloor\}$ for \texttt{topk\_ratio} $\rho$.
+Let $\mathcal{K}$ be the set of indices of the $k$ largest scores. The centroid is:
+\[
+C=\frac{1}{k}\sum_{v\in\mathcal{K}} p(v)\in\R^3.
+\]
+
+\subsection{\texttt{export\_score\_points}: thresholded point list}
+Given a threshold $\tau$, select voxels $\{v:Q_{\mathrm{norm}}(v)\ge \tau\}$ and output $(x,y,z,q)$ where $(x,y,z)=p(v)$ and $q=Q_{\mathrm{norm}}(v)$.
+
+\section{Math in \texttt{src/simulator.py}}
+\subsection{\texttt{pose\_to\_matrix}: camera frame basis}
+Given a pose with position $p\in\R^3$, look-at point $\ell\in\R^3$, and up vector $u\in\R^3$, define:
+\[
+f=\frac{\ell-p}{\norm{\ell-p}+\varepsilon},\qquad
+r=\frac{f\times u}{\norm{f\times u}+\varepsilon},\qquad
+\hat u=r\times f,
+\]
+with small $\varepsilon=10^{-8}$. The camera-to-world matrix is:
+\[
+T_{cw}=
+\begin{bmatrix}
+r & \hat u & -f & p\\
+0&0&0&1
+\end{bmatrix},
+\]
+interpreting the $3\times 3$ block columns as basis vectors.
+
+\subsection{\texttt{generate\_orbital\_poses}: spherical orbit}
+For $N$ views (\texttt{num\_views}), radius $R$ (\texttt{radius}), and elevation $e$ in radians, for view index $i=0,\dots,N-1$:
+\[
+\phi_i=\frac{2\pi i}{N},\quad
+x_i=R\cos\phi_i\cos e,\quad
+y_i=R\sin\phi_i\cos e,\quad
+z_i=R\sin e.
+\]
+The camera position is $p_i=(x_i,y_i,z_i)^\T$, and the look-at is fixed (default $\ell=(0,0,0)^\T$).
+
+\subsection{\texttt{VirtualTabletopSimulator.\_auto\_zoom\_camera}: distance from target image fill}
+Let the mesh axis-aligned bounding box have extent vector $\Delta\in\R^3$.
+The object radius proxy is:
+\[
+r_o=\tfrac12\max(\Delta_x,\Delta_y,\Delta_z).
+\]
+Let $f=\min(f_x,f_y)$ and $m=\min(\text{width},\text{height})$.
+With desired fill fraction $\eta\in(0,1)$:
+\[
+\mathrm{halfpx}=0.5\,\eta\,m,\qquad
+\alpha=\arctan\!\left(\frac{\mathrm{halfpx}}{f}\right),\qquad
+d=\frac{r_o}{\tan\alpha}.
+\]
+Then the implementation applies a margin and clamp:
+\[
+d \leftarrow 1.15\,d,\qquad d \leftarrow \clip{d}{0.15}{5.0}.
+\]
+
+\section{Math in \texttt{src/segmentation.py}}
+\subsection{Camera yaw rotation in world: \texttt{rotate\_cam\_to\_world\_yaw}}
+With $T_{cw}\in\R^{4\times 4}$ and world yaw $\theta$, define
+\[
+T_{cw}' = \begin{bmatrix}R_z(\theta)&0\\0&1\end{bmatrix}T_{cw}.
+\]
+
+\subsection{3D-to-2D projection: \texttt{project\_points\_to\_pixels}}
+World-to-camera transform:
+\[
+T_{wc}=T_{cw}^{-1}.
+\]
+Homogeneous coordinates $\tilde p_w=(p_w^\T,1)^\T$ map to camera coordinates
+\[
+p_c = (T_{wc}\tilde p_w)_{1:3}=(X_c,Y_c,Z_c)^\T.
+\]
+Depth is defined by the OpenGL convention:
+\[
+d=-Z_c,\qquad d_{\mathrm{safe}}=\max(d,10^{-6}).
+\]
+Pixel coordinates:
+\[
+u=f_x\frac{X_c}{d_{\mathrm{safe}}}+c_x,\qquad
+v=-f_y\frac{Y_c}{d_{\mathrm{safe}}}+c_y.
+\]
+Validity for per-point lookup additionally requires $(u,v)$ in image bounds and $d>0$.
+
+\subsection{Mask sampling: \texttt{compute\_point\_mask\_weights}}
+Given a 2D mask image $M\in\R^{H\times W}$, a point’s weight is
+\[
+w_n=
+\begin{cases}
+M[\mathrm{round}(v_n),\mathrm{round}(u_n)] & \text{if valid}\\
+0 & \text{otherwise}.
+\end{cases}
+\]
+
+\subsection{Point cloud rendering: \texttt{render\_point\_cloud\_view}}
+Let each valid point project to integer pixel $(u_n,v_n)$ with depth $d_n>0$. The per-pixel depth map uses a $z$-buffer minimum:
+\[
+D[v,u]=\min\{d_n:\ (u_n,v_n)=(u,v)\},
+\]
+and $D[v,u]=+\infty$ if no point hits the pixel.
+Define $d_{\min}=\min D$ over finite pixels and $d_{\max}=\max D$ over finite pixels. The intensity (closer $\Rightarrow$ brighter) is:
+\[
+I[v,u]=
+\begin{cases}
+\dfrac{d_{\max}-D[v,u]}{\max(d_{\max}-d_{\min},10^{-6})} & D[v,u]<\infty\\
+0 & \text{otherwise}.
+\end{cases}
+\]
+The code then maps $I$ to uint8 ($255I$) and optionally applies dilation (structuring element radius \texttt{point\_radius\_px}) and Gaussian blur (standard deviation \texttt{blur\_sigma}).
+
+\subsection{Multiview semantic painting: \texttt{compute\_point\_mask\_weights\_multiview}}
+For $V$ views and step $\Delta$ (default $\Delta=360^\circ/V$), view $i$ uses yaw $\theta_i=i\Delta$ and camera $T_{cw}^{(i)}$:
+\[
+T_{cw}^{(i)}=\begin{bmatrix}R_z(\theta_i)&0\\0&1\end{bmatrix}T_{cw}^{(0)}.
+\]
+Each view yields per-point weights $w_n^{(i)}$. The aggregate weight is:
+\[
+w_n=
+\begin{cases}
+\max_i w_n^{(i)} & \text{aggregation = max}\\
+\frac{1}{V}\sum_i w_n^{(i)} & \text{aggregation = mean}\\
+\sum_i w_n^{(i)} & \text{aggregation = sum}.
+\end{cases}
+\]
+
+\subsection{Legacy scorer: \texttt{compute\_combined\_score}}
+Also present in this file is a score that matches the product + min--max normalization pattern:
+\[
+Q(v)=\mathrm{Var}(v)\cdot S(v),\qquad
+Q_{\mathrm{norm}}(v)=\frac{Q(v)-\min Q}{\max Q-\min Q}\quad(\text{if }\max Q-\min Q\ge 10^{-6}).
+\]
+
+\section{Math in \texttt{src/nbv\_policy.py}}
+\subsection{View direction}
+For pose $(p,\ell)$:
+\[
+d=\frac{\ell-p}{\norm{\ell-p}+\varepsilon}.
+\]
+
+\subsection{Active-Hallucination policy: \texttt{select\_next\_view\_active}}
+Given a target centroid $c\in\R^3$ and candidate pose $i$ at position $p_i$ with view direction $d_i$, define the direction to target:
+\[
+t_i=c-p_i,\qquad \hat t_i=\frac{t_i}{\norm{t_i}+\varepsilon}.
+\]
+Alignment (cosine similarity):
+\[
+a_i=d_i^\T \hat t_i\in[-1,1].
+\]
+Angle in degrees:
+\[
+\theta_i=\frac{180}{\pi}\arccos\!\bigl(\clip{a_i}{-1}{1}\bigr).
+\]
+Candidates with $\theta_i<\theta_{\min}$ (\texttt{min\_angle\_deg}) are skipped. Scoring uses nonnegative alignment only:
+\[
+s_i=\bigl(\max(a_i,0)\bigr)^{\gamma},
+\]
+where $\gamma=\texttt{alignment\_pow}$. The selected next view is $\argmax_i s_i$ over unvisited candidates.
+
+\subsection{Geometric baseline: \texttt{select\_next\_view\_geometric}}
+Given current view direction $d_{\mathrm{cur}}$, choose the unvisited view that maximizes the angular distance:
+\[
+i^\star=\argmax_i \ \arccos\!\bigl(\clip{d_{\mathrm{cur}}^\T d_i}{-1}{1}\bigr).
+\]
+
+\section{Math in \texttt{src/cloud\_frame.py}}
+\subsection{Binary object mask: \texttt{compute\_object\_mask}}
+Given an RGB image, compute grayscale as channel mean $\mathrm{gray}=\frac{1}{3}(R+G+B)$ and output:
+\[
+M[u,v]=\mathbf{1}\{\mathrm{gray}[u,v]>\tau\},
+\]
+with threshold $\tau$ (\texttt{threshold}).
+
+\subsection{Robust normalization to bounds: \texttt{normalize\_clouds\_to\_bounds}}
+For a reference cloud $P_0$:
+\[
+c=
+\begin{cases}
+\mathrm{median}(P_0) & \text{center\_method = median}\\
+\mathrm{mean}(P_0) & \text{center\_method = mean}
+\end{cases}
+\in\R^3,
+\]
+and centered points $p'=p-c$. Let $q$ be the $0.995$ quantile of $\abs{p'}$ over all coordinates and points (implemented via $\mathrm{quantile}(\abs{P},0.995)$), and define:
+\[
+q\leftarrow \max(q,10^{-6}),\qquad
+T = \texttt{margin}\cdot \texttt{grid\_bounds}.
+\]
+Scaling is:
+\[
+s=
+\begin{cases}
+1 & q\le T\\
+\frac{T}{q} & q>T.
+\end{cases}
+\]
+The normalized points are $p''=s(p-c)$.
+
+\subsection{Orbit distance from desired viewport fill: \texttt{estimate\_orbit\_distance\_for\_cloud}}
+Let the cloud’s axis-aligned bounding box extent be $\Delta\in\R^3$. Define:
+\[
+r_o=\tfrac12\max(\Delta_x,\Delta_y,\Delta_z).
+\]
+With $f=\min(f_x,f_y)$ and $m=\min(\text{width},\text{height})$, and desired fill $\eta$:
+\[
+\mathrm{halfpx}=0.5\,\clip{\eta}{0.1}{0.95}\,m,\qquad
+\alpha=\arctan\!\left(\frac{\mathrm{halfpx}}{f}\right),\qquad
+d=\frac{r_o}{\max(\tan\alpha,10^{-6})}.
+\]
+Then $d \leftarrow \texttt{margin}\cdot d$ and $d \leftarrow \clip{d}{d_{\min}}{d_{\max}}$.
+
+\subsection{Silhouette IoU and yaw alignment: \texttt{estimate\_yaw\_align\_to\_mask}}
+Define binary IoU:
+\[
+\IoU(A,B)=\frac{\abs{A\cap B}}{\abs{A\cup B}},
+\]
+with $\IoU=0$ if $\abs{A\cup B}=0$.
+For a yaw hypothesis $\theta$, rotate the point cloud:
+\[
+P_\theta=\{R_z(\theta)p:\ p\in P\},
+\]
+render it (via \texttt{render\_point\_cloud\_view}) with base camera $T_{cw}$ and intrinsics, threshold to a binary mask $\widehat M_\theta$, and score it by $\IoU(\widehat M_\theta, M_{\text{input}})$.
+
+The algorithm performs a coarse grid search over $\theta$ (either over $[-180^\circ,180^\circ)$ or a window around a prior), then a fine search around the best coarse yaw, returning the yaw that maximizes IoU. The final yaw is wrapped to $[-180^\circ,180^\circ)$.
+
+\subsection{Yaw application: \texttt{rotate\_clouds\_yaw}}
+Given yaw $\theta$, each cloud is rotated as $P'=\{R_z(\theta)p:\ p\in P\}$.
+
+\section{Math in \texttt{src/pointe\_alignment.py}}
+\subsection{Robust center and scale}
+Robust center:
+\[
+c=\mathrm{median}(P)\in\R^3.
+\]
+Robust scale uses the $90$th percentile of radial distances:
+\[
+d_n=\norm{p_n-c},\qquad
+s=\mathrm{percentile}(\{d_n\},90).
+\]
+Normalized coordinates:
+\[
+p_n'=\frac{p_n-c}{s}.
+\]
+
+\subsection{Core-point filtering: \texttt{\_keep\_core\_points}}
+Distances from a robust center $c$:
+\[
+d_n=\norm{p_n-c}.
+\]
+Quantile threshold $t_q=\mathrm{quantile}(\{d_n\},\rho)$ with ratio $\rho\in(0,1]$.
+MAD-based threshold uses
+\[
+m=\mathrm{median}(\{d_n\}),\qquad
+\mathrm{MAD}=\mathrm{median}(\{\abs{d_n-m}\})+10^{-6},\qquad
+t_{\mathrm{mad}}=m+3.5\,\mathrm{MAD}.
+\]
+Final threshold $t=\min(t_q,t_{\mathrm{mad}})$ and keep $p_n$ with $d_n\le t$.
+
+\subsection{Front surface extraction: \texttt{\_extract\_front\_surface}}
+Assuming the conditioning/front direction is approximately $+Y$, the module approximates the visible surface under an orthographic $+Y$ view:
+\begin{itemize}
+  \item Compute robust bounds $(x_0,x_1)$ and $(z_0,z_1)$ as $1\%$ and $99\%$ quantiles of $x$ and $z$.
+  \item Bin $(x,z)$ into a $G\times G$ grid (\texttt{surface\_grid}):
+  \[
+  u=\left\lfloor\frac{x-x_0}{x_1-x_0}(G-1)\right\rfloor,\qquad
+  v=\left\lfloor\frac{z-z_0}{z_1-z_0}(G-1)\right\rfloor,
+  \]
+  clamped to $[0,G-1]$.
+  \item For each bin $(u,v)$, keep the point with \emph{maximum} $y$.
+\end{itemize}
+
+\subsection{Yaw search and symmetric NN score: \texttt{align\_clouds\_to\_reference\_front}}
+Let reference normalized surface points be $Q=\{q_j\}$ with KD-tree, and let source surface points be $P=\{p_n\}$.
+For a yaw $\theta$:
+\[
+p_n(\theta)=R_z(\theta)p_n.
+\]
+A translation heuristic aligns robust centers:
+\[
+t(\theta)=\mathrm{center}(Q)-R_z(\theta)\mathrm{center}(P),
+\]
+so translated source is $p_n(\theta)+t(\theta)$.
+Define nearest-neighbor distances
+\[
+d_1(\theta)=\{ \min_j \norm{p_n(\theta)+t(\theta)-q_j} \}_n,\qquad
+d_2(\theta)=\{ \min_n \norm{q_j-(p_n(\theta)+t(\theta))} \}_j.
+\]
+The data score uses $0.9$ quantiles:
+\[
+s_{\mathrm{data}}(\theta)=\mathrm{quantile}(d_1(\theta),0.9)+\mathrm{quantile}(d_2(\theta),0.9).
+\]
+The full score adds a yaw regularizer:
+\[
+s(\theta)=s_{\mathrm{data}}(\theta)+\lambda\left(\frac{\abs{\theta}}{\theta_{\max}}\right)^2,
+\]
+with $\lambda=0.002$. The algorithm chooses $\theta^\star=\argmin s(\theta)$ over a discrete candidate list, then refines in a fine neighborhood.
+
+\subsection{Trimmed translation refinement}
+After choosing $\theta^\star$, compute NN distances $d_n$ from transformed source to reference. Keep the smallest $k=\lceil \rho N\rceil$ distances (\texttt{trim\_ratio} $\rho$) as inliers, and set translation to match inlier means:
+\[
+t^\star=\bar q_{\text{in}}-\bar p_{\text{in}}(\theta^\star).
+\]
+
+\subsection{Denormalization}
+With reference center $c_0$ and scale $s_0$, the aligned (unnormalized) source points are:
+\[
+\hat p = s_0\bigl(R_z(\theta^\star)p' + t^\star\bigr) + c_0.
+\]
+
+\section{Math in \texttt{src/pointe\_wrapper.py}}
+\subsection{Cropping transform: \texttt{\_get\_crop\_transform}}
+Given an image of size $H\times W$, compute a bounding rectangle for nonzero pixels, with center $(c_x,c_y)$ and side length
+\[
+L=\max(\text{bbox\_w},\text{bbox\_h})+2\cdot \text{padding},
+\]
+then crop to an axis-aligned square region clipped to image bounds.
+The returned scale proxy is:
+\[
+\mathrm{scale}=\frac{\max(\text{crop\_w},\text{crop\_h})}{\max(W,H)}.
+\]
+The returned offset is the crop-center displacement from the full image center, normalized:
+\[
+\mathrm{off}_x=\frac{\text{crop\_center}_x - W/2}{W},\qquad
+\mathrm{off}_y=\frac{\text{crop\_center}_y - H/2}{H}.
+\]
+
+\subsection{Point-count adjustment: \texttt{\_sample\_once}}
+Let target count be $T$ and native per-pass count be $N$ (often $4096$).
+\begin{itemize}
+  \item If $T\le N$, sample one native cloud and randomly choose $T$ indices (with replacement if needed).
+  \item If $T>N$, set number of passes $P=\lceil T/N\rceil$ (clamped to $8$), sample $P$ independent clouds with distinct seeds, concatenate, then choose $T$ points without replacement (and if still short, pad by resampling from the chosen subset).
+\end{itemize}
+
+\subsection{Synthetic fallback cloud: \texttt{\_synthetic\_point\_cloud}}
+For each point:
+\[
+\theta\sim \mathrm{Unif}(0,2\pi),\quad
+z\sim \mathrm{Unif}(0.05,0.25),\quad
+r=0.1+0.02\,\xi,\ \xi\sim \mathcal{N}(0,1),
+\]
+\[
+p=(r\cos\theta,\ r\sin\theta,\ z)^\T.
+\]
+
+\section{Math in \texttt{src/experiments.py}}
+\subsection{Episode loop summary}
+At each step $t$ (view index $v_t$):
+\begin{enumerate}
+  \item Render image $I_t$ from simulator camera pose.
+  \item Generate Point-E hypotheses $\{P_{t,i}\}_{i=1}^K$ from $I_t$.
+  \item Normalize clouds to bounds and align yaw to match the silhouette of $I_t$ (cloud-frame alignment).
+  \item Compute variance grid $\mathrm{Var}_t$ and semantic grid $S_t$, then score $Q_t=\mathrm{norm}(\mathrm{Var}_t\cdot S_t)$.
+  \item Extract top-$k$ centroid $C_t$ from $Q_t$.
+  \item Choose next view $v_{t+1}$ according to the selected policy.
+\end{enumerate}
+
+\subsection{World-frame centroid approximation for evaluation}
+Let $p^{\text{sim}}_t$ and $\ell^{\text{sim}}_t$ be simulator camera position and look-at for view $v_t$, and let $p^{\text{cloud}}_t$ and $\ell^{\text{cloud}}_t$ be the analogous cloud-frame pose. Define:
+\[
+d_{\text{world}}=\norm{p^{\text{sim}}_t-\ell^{\text{sim}}_t},\qquad
+d_{\text{cloud}}=\norm{p^{\text{cloud}}_t-\ell^{\text{cloud}}_t},
+\qquad
+\alpha=\frac{d_{\text{world}}}{\max(d_{\text{cloud}},10^{-6})}.
+\]
+Then map the cloud centroid $C_t$ approximately to world coordinates by
+\[
+\hat C_t^{\text{world}}=\ell^{\text{sim}}_t+\alpha\, C_t.
+\]
+Distance to ground-truth handle centroid $C^\star$ is:
+\[
+\mathrm{dist}_t=\norm{\hat C_t^{\text{world}}-C^\star}.
+\]
+Success at the final step uses $\mathrm{dist}\le \tau$ where $\tau=\texttt{success\_threshold}$.
+
+\subsection{Variance Reduction Rate (VRR)}
+Let $S_t=\sum_v \mathrm{Var}_t(v)$ be the per-step variance sum. With baseline $S_0$:
+\[
+\mathrm{VRR}_t=\frac{S_0-S_t}{\max(S_0,10^{-8})}.
+\]
+
+\section{Math in \texttt{src/visualization.py}}
+\subsection{Offscreen Open3D helper: center, extent, and radius}
+Given concatenated points $\{p_n\}$:
+\[
+\mathrm{center}=\frac{1}{N}\sum_{n=1}^N p_n,\qquad
+\mathrm{extent}=\max_n p_n - \min_n p_n,\qquad
+r=\norm{\mathrm{extent}}+10^{-6}.
+\]
+A default camera eye is set as
+\[
+\mathrm{eye}=\mathrm{center} + (0,0,2.5r)^\T.
+\]
+
+\subsection{Max-projection visualizations}
+Several plotting helpers use a $Z$-axis max projection of a 3D grid $G[x,y,z]$:
+\[
+\Pi[x,y]=\max_z G[x,y,z].
+\]
+\texttt{save\_variance\_max\_projection} additionally normalizes by the max value:
+\[
+\Pi_{\mathrm{norm}}=\frac{\Pi}{\max(\Pi)+10^{-8}}.
+\]
+
+\subsection{Plot-side ``VRR'' normalization}
+\texttt{plot\_vrr\_curves} plots a normalized variance curve (not the same as the reduction-rate metric):
+\[
+\tilde v_t=\frac{v_t}{v_0+10^{-8}}.
+\]
+
+\section{Math in \texttt{src/scripts/*.py}}
+Scripts mostly orchestrate and visualize results. Notable explicit math operations include:
+\subsection{\texttt{src/scripts/demo\_orbital\_camera.py}: contact sheet grid}
+Given $n$ images, choose columns and rows:
+\[
+c=\left\lceil\sqrt{n}\right\rceil,\qquad
+r=\left\lceil\frac{n}{c}\right\rceil.
+\]
+
+\subsection{\texttt{src/scripts/demo\_variance\_field.py}: default semantic weights}
+When semantic masking is disabled, the demo uses uniform weights:
+\[
+S(v)\equiv 1\quad\Rightarrow\quad Q(v)=\mathrm{Var}(v).
+\]
+
+\subsection{\texttt{src/scripts/generate\_evaluation\_dataset.py}: mesh normalization}
+For a mesh with centroid $m$ and extents $\Delta$:
+\[
+v \leftarrow v - m,\qquad
+v \leftarrow \frac{1}{\max(\Delta)}v,\qquad
+v \leftarrow v - (0,0,z_{\min})^\T
+\]
+so the normalized mesh is centered, unit-scaled by max extent, and rests on $z=0$.
+
+\subsection{\texttt{src/scripts/inspect\_meshes.py}: bounding box extent and axis size}
+For axis-aligned bounds $(\min v,\max v)$:
+\[
+\mathrm{extent}=\max v-\min v.
+\]
+The Open3D coordinate-frame size is set proportional to $\max(\mathrm{extent})$ (e.g.\ $0.5\max(\mathrm{extent})$ or $0.75\max(\mathrm{extent})$ depending on backend).
+
+\subsection{\texttt{src/scripts/generate\_evaluation\_dataset.py}: parametric primitives}
+The dataset generator samples geometric parameters uniformly (e.g.\ radii, heights, handle lengths) and applies rigid transforms such as $R_x(\pi/2)$ and $R_z(\theta)$ to position parts.
+
+\section{Math in \texttt{src/tests/*.py}}
+\subsection{\texttt{src/tests/test\_cloud\_frame.py}: mug-like synthetic cloud}
+Body points:
+\[
+\theta\sim \mathrm{Unif}(0,2\pi),\quad
+z\sim \mathrm{Unif}(-0.1,0.6),\quad
+r=0.25+0.01\,\xi,\ \xi\sim\mathcal{N}(0,1),
+\]
+\[
+(x,y)=(r\cos\theta,\ r\sin\theta).
+\]
+Handle points:
+\[
+t\sim \mathrm{Unif}(0,\pi),\quad
+r_h=0.10+0.005\,\xi,\ \xi\sim\mathcal{N}(0,1),
+\]
+\[
+h_x=0.38+r_h\cos t,\quad
+h_y=r_h\sin t,\quad
+h_z=0.25+0.06\,\xi.
+\]
+
+\subsection{\texttt{src/tests/test\_pointe\_alignment.py}: synthetic ``mug'' with logo and handle}
+Body uses a noisy radius cylinder:
+\[
+\theta\sim \mathrm{Unif}(0,2\pi),\quad z\sim \mathrm{Unif}(-0.5,0.5),\quad r=1.0+0.02\,\xi.
+\]
+Logo patch concentrates points near the front face ($y\approx 1.02$). Handle center at yaw $\psi$ (with $0^\circ$ at $+Y$) uses
+\[
+h_{x0}=1.25\sin\psi,\qquad h_{y0}=1.25\cos\psi,
+\]
+then adds a small circle in the $(x,y)$ plane.
+Seed-specific global jitter applies:
+\[
+p \leftarrow (R_z(\delta)p)\cdot \alpha + t,
+\]
+with yaw jitter $\delta$, scale $\alpha$, and translation $t$.
+
+\subsection{\texttt{src/tests/test\_semantic\_painting.py}: multiview aggregation check}
+With three views where one returns a zero mask and two return ones, the expected mean aggregation weight is:
+\[
+w = \frac{1+0+1}{3}=\frac{2}{3}.
+\]
+
+\subsection{\texttt{src/tests/generate\_occluded\_test.py}: partial mug + rotation}
+The synthetic mug is rotated about $Z$ by $150^\circ$:
+\[
+p \leftarrow R_z(150^\circ)p.
+\]
+
+\subsection{\texttt{src/tests/sanity\_check\_ghosting.py}: variance statistics}
+Given variance grid $V$, reported scalars include:
+\[
+V_{\max}=\max_v V(v),\qquad \bar V=\frac{1}{M}\sum_v V(v),\qquad
+\#\{v:V(v)>\tau\}.
+\]
+
+\subsection{\texttt{src/tests/sanity\_check\_ghosting.py}: color mapping}
+Exported variance points store $(x,y,z,V)$. The 2D/3D visualization normalizes by a constant and linearly maps to RGB:
+\[
+\nu=\clip{V/0.25}{0}{1},\qquad
+\mathrm{RGB}=(\nu,\ 0,\ 1-\nu).
+\]
+
+\subsection{\texttt{src/tests/sanity\_check\_semantic.py}: score color mapping}
+For exported points $(x,y,z,S)$ with score $S\in[0,1]$, the visualization uses:
+\[
+\mathrm{RGB}=(S,\ 0.8S,\ 1-S).
+\]
+
+\end{document}
