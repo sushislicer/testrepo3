@@ -1,4 +1,4 @@
-"""Download a small real-mesh subset (Option B) into `assets/`.
+"""Download a small real-mesh subset (Objaverse) into `assets/objaverse_subset`.
 
 This script targets Objaverse via the official `objaverse` Python package and
 filters objects using LVIS annotations for faster and more reliable category matching.
@@ -14,7 +14,7 @@ Example:
   python3 -m src.scripts.download_objaverse_subset \
     --categories mugs,pans,kettles,hammers \
     --max_per_category 50 \
-    --out_dir assets/objaverse \
+    --out_dir assets/objaverse_subset \
     --export_obj
 
 Notes:
@@ -37,15 +37,76 @@ CURRENT_SCRIPT_PATH = Path(__file__).resolve()
 PROJECT_ROOT = CURRENT_SCRIPT_PATH.parent.parent.parent
 
 
-def _normalize_mesh_to_sim_convention(mesh):
-    """Center in XY, put base on z=0. Similar to simulator normalization."""
+def _normalize_mesh_to_sim_convention(mesh, *, stable_pose: bool = True):
+    """Normalize mesh into a tabletop-friendly convention.
+
+    Goals:
+    - apply a plausible *upright/stable* orientation (Objaverse assets have inconsistent up-axes)
+    - center in XY
+    - put the lowest point on z=0
+
+    The stable-pose step is best-effort and falls back to translation-only.
+    """
     import numpy as np
 
-    bounds = mesh.bounds
+    try:
+        if stable_pose:
+            # Try trimesh stable-pose estimation (works well for mugs/pans/etc).
+            # API varies slightly across trimesh versions, so keep this very defensive.
+            poses = None
+            probs = None
+            try:
+                poses, probs = mesh.compute_stable_poses()  # type: ignore[attr-defined]
+            except Exception:
+                try:
+                    from trimesh.poses import compute_stable_poses
+
+                    poses, probs = compute_stable_poses(mesh)
+                except Exception:
+                    poses, probs = None, None
+
+            if poses is not None and len(poses) > 0:
+                best_i = 0
+                if probs is not None and len(probs) == len(poses):
+                    try:
+                        best_i = int(np.argmax(np.asarray(probs, dtype=np.float32)))
+                    except Exception:
+                        best_i = 0
+                T = np.asarray(poses[best_i], dtype=np.float32)
+                if T.shape == (4, 4):
+                    mesh.apply_transform(T)
+    except Exception:
+        # Never hard-fail the downloader due to pose estimation.
+        pass
+
+    # Center XY and put base on z=0.
+    bounds = np.asarray(mesh.bounds, dtype=np.float32)
     min_xyz, max_xyz = bounds
-    translate = np.array([-0.5 * (min_xyz[0] + max_xyz[0]), -0.5 * (min_xyz[1] + max_xyz[1]), -min_xyz[2]])
+    translate = np.array(
+        [-0.5 * (min_xyz[0] + max_xyz[0]), -0.5 * (min_xyz[1] + max_xyz[1]), -float(min_xyz[2])],
+        dtype=np.float32,
+    )
     mesh.apply_translation(translate)
     return mesh
+
+
+def _prune_dir_to_obj_only(dir_path: Path) -> None:
+    """Remove non-.obj files and nested directories under a category folder."""
+    for p in list(dir_path.rglob("*")):
+        if p.is_dir():
+            continue
+        if p.suffix.lower() == ".obj":
+            continue
+        try:
+            p.unlink()
+        except Exception:
+            pass
+    # Remove now-empty directories.
+    for d in sorted([p for p in dir_path.rglob("*") if p.is_dir()], reverse=True):
+        try:
+            d.rmdir()
+        except Exception:
+            pass
 
 
 def parse_args() -> argparse.Namespace:
@@ -65,7 +126,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--out_dir",
         type=str,
-        default="assets/objaverse",
+        default="assets/objaverse_subset",
         help="Output directory (project-relative or absolute).",
     )
     p.add_argument(
@@ -89,6 +150,19 @@ def parse_args() -> argparse.Namespace:
         "--keep_original",
         action="store_true",
         help="Keep original downloaded files (e.g., .glb) alongside exported .obj.",
+    )
+    p.add_argument(
+        "--keep_aux_files",
+        action="store_true",
+        help=(
+            "Keep auxiliary non-mesh files in category folders (textures/materials/etc). "
+            "By default, we prune non-.obj files to avoid loading issues and keep the subset clean."
+        ),
+    )
+    p.add_argument(
+        "--no_stable_pose",
+        action="store_true",
+        help="Disable stable-pose upright normalization during OBJ export.",
     )
     p.add_argument(
         "--dry_run",
@@ -214,7 +288,7 @@ def main() -> None:
                         if not mesh.geometry:
                             continue
                         mesh = trimesh.util.concatenate(list(mesh.geometry.values()))
-                    mesh = _normalize_mesh_to_sim_convention(mesh)
+                    mesh = _normalize_mesh_to_sim_convention(mesh, stable_pose=not bool(args.no_stable_pose))
                     dst = cat_dir / f"{uid}.obj"
                     mesh.export(dst)
                     if not args.keep_original:
@@ -227,6 +301,10 @@ def main() -> None:
                 except Exception as e:
                     print(f"[WARN] Export failed for {uid}: {type(e).__name__}: {e}")
 
+            # Optional pruning: keep only *.obj in each category folder.
+            if not args.keep_aux_files and not args.keep_original:
+                _prune_dir_to_obj_only(cat_dir)
+
     (out_dir / "downloaded_paths.json").write_text(json.dumps(all_downloaded, indent=2), encoding="utf-8")
     print(f"Wrote downloaded paths: {out_dir / 'downloaded_paths.json'}")
     print("Done.")
@@ -234,4 +312,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

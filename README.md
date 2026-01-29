@@ -239,6 +239,7 @@ All entrypoints live under `src/scripts/` and can be run via `python -m src.scri
 
 - Point-E and CLIPSeg weights are downloaded automatically via HuggingFace when first used. Expect GPU to speed up Point-E; CPU will be slow.
 - The pipeline is inference-only; no training loops are included.
+- Real-world mesh assets (e.g., Objaverse) often have inconsistent coordinate frames. The simulator applies a best-effort stable-pose upright normalization by default (see `normalize_stable_pose` in [`SimulatorConfig`](src/config.py:21)).
 - See `documents/plan.md` for milestone guidance and `documents/project.md` for the research pitch.
 
 ## Troubleshooting

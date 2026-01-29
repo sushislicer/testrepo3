@@ -33,6 +33,12 @@ class SimulatorConfig:
     exposure_target_mean: float = 80.0  # target mean intensity on object pixels (0-255)
     exposure_max_gain: float = 8.0
 
+    # Mesh normalization.
+    # Real-world assets (e.g., Objaverse) often have inconsistent up-axes and can
+    # appear sideways. When enabled, we attempt a best-effort stable-pose upright
+    # transform before centering and placing the base on z=0.
+    normalize_stable_pose: bool = True
+
 
 @dataclass
 class PointEConfig:

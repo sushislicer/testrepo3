@@ -106,7 +106,7 @@ class VirtualTabletopSimulator:
 
         if _RENDERER_AVAILABLE:
             try:
-                self.mesh = self._load_mesh(config.mesh_path)
+                self.mesh = self._load_mesh(config.mesh_path, normalize_stable_pose=bool(getattr(config, "normalize_stable_pose", True)))
                 self.look_at = self._compute_look_at(self.mesh)
                 if bool(getattr(config, "auto_zoom", False)):
                     self._auto_zoom_camera()
@@ -123,7 +123,7 @@ class VirtualTabletopSimulator:
                 print(f"[Simulator] Renderer init failed ({e}). Mock Mode enabled.")
                 self.renderer = None
 
-    def _load_mesh(self, mesh_path: str) -> trimesh.Trimesh:
+    def _load_mesh(self, mesh_path: str, *, normalize_stable_pose: bool = True) -> trimesh.Trimesh:
         path = Path(mesh_path)
         if not path.exists():
             raise FileNotFoundError(f"Mesh not found: {mesh_path}")
@@ -158,6 +158,36 @@ class VirtualTabletopSimulator:
         except Exception:
             # If conversion fails, keep original visual.
             pass
+
+        # Best-effort upright/stable pose normalization.
+        # Objaverse assets commonly come in arbitrary coordinate frames.
+        if bool(normalize_stable_pose):
+            try:
+                poses = None
+                probs = None
+                try:
+                    poses, probs = mesh.compute_stable_poses()  # type: ignore[attr-defined]
+                except Exception:
+                    try:
+                        from trimesh.poses import compute_stable_poses
+
+                        poses, probs = compute_stable_poses(mesh)
+                    except Exception:
+                        poses, probs = None, None
+
+                if poses is not None and len(poses) > 0:
+                    best_i = 0
+                    if probs is not None and len(probs) == len(poses):
+                        try:
+                            best_i = int(np.argmax(np.asarray(probs, dtype=np.float32)))
+                        except Exception:
+                            best_i = 0
+                    T = np.asarray(poses[best_i], dtype=np.float32)
+                    if T.shape == (4, 4):
+                        mesh.apply_transform(T)
+            except Exception:
+                # Never hard-fail loading due to pose estimation.
+                pass
         
         # Normalize to table
         bounds = mesh.bounds
