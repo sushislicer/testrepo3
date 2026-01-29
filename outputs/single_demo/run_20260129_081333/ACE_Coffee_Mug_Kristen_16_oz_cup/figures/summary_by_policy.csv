@@ -1,0 +1,2 @@
+policy,n,mean_vrr_final,std_vrr_final,mean_vrr_best_final,std_vrr_best_final,mean_var_final,std_var_final,mean_semantic_vis_1,mean_semantic_vis_best,semantic_pass_k_rate,gt_runs,success_rate
+active_combined,3,-0.12299423267413327,0.09687663853988089,0.02234664772865802,0.03870552924487934,4049.2173665364585,155.5045141404189,0.09141921997070312,0.09752527872721355,1.0,0,0.0
