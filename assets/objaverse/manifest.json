@@ -1,0 +1,35 @@
+{
+  "source": "objaverse",
+  "categories": {
+    "mugs": [
+      "38e53299cce04fe19235b8b198f7818b",
+      "c25119c5ac6e4654be3b75d78e34a912",
+      "fe27c397cf42404ea4c1f6a32a38a27f",
+      "d40aa57bd3134878b573ba48cfa37f2f",
+      "2555a69678e64f91a286dd8132f7e937"
+    ],
+    "pans": [
+      "2517b867250643c482e0e316151ed758",
+      "bd8a50ef7f4848339a02371edc07e5af",
+      "2131f71349d747a6b6bebfd30456245b",
+      "b093c1c6676649668b7c34b1d9be22a6",
+      "f77a7095794e460a8ba0b2a55f20a27c"
+    ],
+    "kettles": [
+      "1067fad689ec4fc79c9e0bb2ffee9534",
+      "0e7b49db55da490abe06b010cc25501a",
+      "7824b6d021264d32a5fd7894021e9461",
+      "45db143ee7cf48f4803a5d7be9d9b865",
+      "0c55bd8e29384070a72c33ef744d11be"
+    ],
+    "hammers": [
+      "a61976950fe548a2b621fdd14b28538f",
+      "8223c2a7e90f44ae9d3aae0de389617d",
+      "30c09497391d460894e7915a580fd60c",
+      "4a3c93c80bc84efcbf5434b162ac1c8a",
+      "85d105a7589641a5a239d49db0e36feb"
+    ]
+  },
+  "seed": 0,
+  "max_per_category": 5
+}

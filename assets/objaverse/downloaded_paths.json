@@ -1,0 +1,30 @@
+{
+  "mugs": {
+    "38e53299cce04fe19235b8b198f7818b": "/root/.objaverse/hf-objaverse-v1/glbs/000-078/38e53299cce04fe19235b8b198f7818b.glb",
+    "c25119c5ac6e4654be3b75d78e34a912": "/root/.objaverse/hf-objaverse-v1/glbs/000-046/c25119c5ac6e4654be3b75d78e34a912.glb",
+    "fe27c397cf42404ea4c1f6a32a38a27f": "/root/.objaverse/hf-objaverse-v1/glbs/000-035/fe27c397cf42404ea4c1f6a32a38a27f.glb",
+    "d40aa57bd3134878b573ba48cfa37f2f": "/root/.objaverse/hf-objaverse-v1/glbs/000-096/d40aa57bd3134878b573ba48cfa37f2f.glb",
+    "2555a69678e64f91a286dd8132f7e937": "/root/.objaverse/hf-objaverse-v1/glbs/000-009/2555a69678e64f91a286dd8132f7e937.glb"
+  },
+  "pans": {
+    "2517b867250643c482e0e316151ed758": "/root/.objaverse/hf-objaverse-v1/glbs/000-071/2517b867250643c482e0e316151ed758.glb",
+    "bd8a50ef7f4848339a02371edc07e5af": "/root/.objaverse/hf-objaverse-v1/glbs/000-158/bd8a50ef7f4848339a02371edc07e5af.glb",
+    "2131f71349d747a6b6bebfd30456245b": "/root/.objaverse/hf-objaverse-v1/glbs/000-098/2131f71349d747a6b6bebfd30456245b.glb",
+    "b093c1c6676649668b7c34b1d9be22a6": "/root/.objaverse/hf-objaverse-v1/glbs/000-155/b093c1c6676649668b7c34b1d9be22a6.glb",
+    "f77a7095794e460a8ba0b2a55f20a27c": "/root/.objaverse/hf-objaverse-v1/glbs/000-017/f77a7095794e460a8ba0b2a55f20a27c.glb"
+  },
+  "kettles": {
+    "1067fad689ec4fc79c9e0bb2ffee9534": "/root/.objaverse/hf-objaverse-v1/glbs/000-130/1067fad689ec4fc79c9e0bb2ffee9534.glb",
+    "0e7b49db55da490abe06b010cc25501a": "/root/.objaverse/hf-objaverse-v1/glbs/000-050/0e7b49db55da490abe06b010cc25501a.glb",
+    "7824b6d021264d32a5fd7894021e9461": "/root/.objaverse/hf-objaverse-v1/glbs/000-003/7824b6d021264d32a5fd7894021e9461.glb",
+    "45db143ee7cf48f4803a5d7be9d9b865": "/root/.objaverse/hf-objaverse-v1/glbs/000-101/45db143ee7cf48f4803a5d7be9d9b865.glb",
+    "0c55bd8e29384070a72c33ef744d11be": "/root/.objaverse/hf-objaverse-v1/glbs/000-049/0c55bd8e29384070a72c33ef744d11be.glb"
+  },
+  "hammers": {
+    "a61976950fe548a2b621fdd14b28538f": "/root/.objaverse/hf-objaverse-v1/glbs/000-019/a61976950fe548a2b621fdd14b28538f.glb",
+    "8223c2a7e90f44ae9d3aae0de389617d": "/root/.objaverse/hf-objaverse-v1/glbs/000-033/8223c2a7e90f44ae9d3aae0de389617d.glb",
+    "30c09497391d460894e7915a580fd60c": "/root/.objaverse/hf-objaverse-v1/glbs/000-110/30c09497391d460894e7915a580fd60c.glb",
+    "4a3c93c80bc84efcbf5434b162ac1c8a": "/root/.objaverse/hf-objaverse-v1/glbs/000-072/4a3c93c80bc84efcbf5434b162ac1c8a.glb",
+    "85d105a7589641a5a239d49db0e36feb": "/root/.objaverse/hf-objaverse-v1/glbs/000-042/85d105a7589641a5a239d49db0e36feb.glb"
+  }
+}
