@@ -96,6 +96,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--trials", type=int, default=3, help="Trials per setting.")
     parser.add_argument("--output_dir", type=str, default="outputs/batch_results", help="Output dir.")
 
+    # Mesh pose normalization.
+    # Some real-world assets (e.g., Objaverse) come in arbitrary coordinate frames,
+    # so stable-pose upright normalization can help. However, the 5 shipped mug
+    # assets are already oriented correctly and stable-pose can choose a sideways
+    # placement (cup lying on its side), which is undesirable for the mugs5 preset.
+    parser.add_argument(
+        "--normalize_stable_pose",
+        type=str,
+        default="auto",
+        choices=["auto", "on", "off"],
+        help=(
+            "Control simulator stable-pose normalization. "
+            "auto: disable for --preset mugs5, enable otherwise. "
+            "on/off: force enable/disable."
+        ),
+    )
+
     # Run directory handling.
     parser.add_argument(
         "--run_name",
@@ -377,6 +394,18 @@ def _parse_policies(policies_tokens: list[str]) -> list[str]:
 def main() -> None:
     args = parse_args()
     base_cfg = ActiveHallucinationConfig.from_yaml(args.config) if args.config else ActiveHallucinationConfig()
+
+    # Decide stable-pose normalization behavior.
+    # - mugs5: shipped assets are already oriented; stable-pose sometimes lays mugs sideways.
+    # - others: keep the default (usually True) unless overridden.
+    if str(args.normalize_stable_pose) == "on":
+        base_cfg.simulator.normalize_stable_pose = True
+    elif str(args.normalize_stable_pose) == "off":
+        base_cfg.simulator.normalize_stable_pose = False
+    else:
+        # auto
+        if str(args.preset or "").strip().lower() == "mugs5":
+            base_cfg.simulator.normalize_stable_pose = False
 
     # Create a fresh run subdirectory by default to avoid overwriting previous results.
     # This makes it easier to compare different hyperparameter sweeps.

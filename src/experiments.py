@@ -383,17 +383,13 @@ class ActiveHallucinationRunner:
         # --- Final Visualization ---
         if cfg.experiment.save_debug:
             create_trajectory_figure(vis_trajectory, str(self._output_root / "fig_trajectory.png"))
-            # For the default figure, use a monotone (non-negative) VRR that is
-            # easier to interpret. Raw VRR can go negative because variance is
-            # re-estimated from scratch at each view.
+            # Single VRR figure: include both raw and best-so-far curves.
+            # Rationale: raw VRR can go negative because variance is re-estimated
+            # from scratch at each view; best-so-far is monotone and easier to
+            # interpret. Plotting both in one figure avoids confusion.
             plot_vrr_curves(
-                {"best_so_far": vrr_best},
+                {"best_so_far": vrr_best, "raw": vrr},
                 str(self._output_root / "fig_vrr.png"),
-            )
-            # Still export the raw VRR for debugging/analysis.
-            plot_vrr_curves(
-                {"raw": vrr},
-                str(self._output_root / "fig_vrr_raw.png"),
             )
 
         result = {
