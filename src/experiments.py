@@ -57,6 +57,9 @@ class StepLog:
     variance_sum: float
     policy_score: float
     centroid: List[float]
+    # Debugging: how many points Point-E produced per seed for this step.
+    # Useful to detect Point-E failures / fallbacks that can make clouds look sparse.
+    cloud_points: Optional[List[int]] = None
     # Fraction of simulator RGB pixels predicted as the semantic region (e.g. handle)
     # in this view. This is a convenient proxy for "did we look at the handle".
     semantic_visibility: Optional[float] = None
@@ -101,6 +104,7 @@ class ActiveHallucinationRunner:
         semantic_render: Optional[np.ndarray] = None,
         semantic_mask: Optional[np.ndarray] = None,
         rgb_semantic_mask: Optional[np.ndarray] = None,
+        score_components: Optional[Dict[str, np.ndarray]] = None,
     ) -> None:
         if not self.cfg.experiment.save_debug:
             return
@@ -126,6 +130,21 @@ class ActiveHallucinationRunner:
         proj = np.max(score_grid, axis=2)
         proj = (proj / (proj.max() + 1e-8) * 255).astype(np.uint8)
         imageio.imwrite(self._output_root / f"step_{step:02d}_score.png", proj)
+
+        # Optional score diagnostics: save max-projections of intermediate grids.
+        # This helps explain why combined score might highlight mug body instead of handle.
+        if score_components:
+            for name, grid3 in score_components.items():
+                try:
+                    g = np.asarray(grid3)
+                    if g.ndim != 3:
+                        continue
+                    p = np.max(g, axis=2)
+                    p = (p / (p.max() + 1e-8) * 255).astype(np.uint8)
+                    imageio.imwrite(self._output_root / f"step_{step:02d}_{name}.png", p)
+                except Exception:
+                    # Never fail the run due to debug I/O.
+                    pass
 
     def run_episode(self, initial_view: int = 0) -> Dict:
         cfg = self.cfg
@@ -158,6 +177,7 @@ class ActiveHallucinationRunner:
             clouds = self.pointe.generate_point_clouds_from_image(
                 rgb, prompt=cfg.pointe.prompt, num_seeds=cfg.pointe.num_seeds, seed_list=cfg.pointe.seed_list
             )
+            cloud_points = [int(pc.shape[0]) for pc in clouds]
 
             # --- Cloud-frame normalization + view alignment ---
             # Normalize into an object-centric frame so voxelization/rendering is coherent.
@@ -231,7 +251,21 @@ class ActiveHallucinationRunner:
 
             variance_grid = compute_variance_field(clouds_aligned, cfg.variance)
             semantic_stack = accumulate_semantic_weights(clouds_aligned, point_weights, cfg.variance)
-            score_grid = combine_variance_and_semantics(variance_grid, semantic_stack, cfg.variance)
+
+            score_components = None
+            if cfg.experiment.save_debug:
+                score_grid, comps = combine_variance_and_semantics(
+                    variance_grid, semantic_stack, cfg.variance, return_components=True
+                )
+                # Keep only a small, stable set of intermediate diagnostics.
+                score_components = {
+                    "score_mean_semantic": comps["mean_semantic"],
+                    "score_semantic_var": comps["semantic_var_raw"],
+                    "score_s1": comps["s1"],
+                    "score_s2": comps["s2"],
+                }
+            else:
+                score_grid = combine_variance_and_semantics(variance_grid, semantic_stack, cfg.variance)
             centroid, _ = extract_topk_centroid(score_grid, grid, cfg.variance.topk_ratio)
             # For *_combined variants, we will also keep the full top-k score set so
             # NBV can aim at a distribution of high-score voxels, not only a centroid.
@@ -299,6 +333,7 @@ class ActiveHallucinationRunner:
                     variance_sum=variance_sum,
                     policy_score=float(policy_score),
                     centroid=centroid.tolist(),
+                    cloud_points=cloud_points,
                     semantic_visibility=sem_vis,
                     distance_to_gt=distance_to_gt,
                     success=success_flag,
@@ -312,6 +347,7 @@ class ActiveHallucinationRunner:
                 semantic_render=semantic_render0,
                 semantic_mask=semantic_mask0,
                 rgb_semantic_mask=rgb_sem_mask,
+                score_components=score_components,
             )
             visited.add(next_view)
             current = next_view

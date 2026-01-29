@@ -20,6 +20,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
 import numpy as np
+from collections import defaultdict
 
 CURRENT_SCRIPT_PATH = Path(__file__).resolve()
 PROJECT_ROOT = CURRENT_SCRIPT_PATH.parent.parent.parent
@@ -33,6 +34,7 @@ from src.experiments import ActiveHallucinationRunner
 from src.pointe_wrapper import PointEGenerator
 from src.segmentation import CLIPSegSegmenter
 from src.simulator import VirtualTabletopSimulator
+from src.visualization import plot_success_rates, plot_vrr_curves
 
 
 def parse_args() -> argparse.Namespace:
@@ -273,6 +275,8 @@ def main() -> None:
     print(f"Policies: {policies} | Trials: {trials} | Steps: {int(base_cfg.experiment.num_steps)}")
 
     last_traj_dir: Path | None = None
+    # Aggregate per-policy metrics across trials (single mesh).
+    agg_results = defaultdict(lambda: {"vrr": [], "vrr_best": [], "success": [], "sem_best": [], "sem_pass_at_1": []})
     for policy in policies:
         for trial in range(trials):
             initial_view = _choose_initial_view(
@@ -321,7 +325,28 @@ def main() -> None:
             )
             try:
                 runner = ActiveHallucinationRunner(cfg, sim=None, pointe=shared_pointe, segmenter=shared_segmenter)
-                runner.run_episode(initial_view=int(initial_view))
+                result = runner.run_episode(initial_view=int(initial_view))
+
+                metrics = result.get("metrics", {})
+                vrr = metrics.get("variance_reduction_rate")
+                if isinstance(vrr, list) and vrr:
+                    agg_results[policy]["vrr"].append(vrr)
+                vrrb = metrics.get("variance_reduction_rate_best_so_far")
+                if isinstance(vrrb, list) and vrrb:
+                    agg_results[policy]["vrr_best"].append(vrrb)
+
+                sem_best = metrics.get("semantic_visibility_best_so_far")
+                if isinstance(sem_best, list) and sem_best:
+                    agg_results[policy]["sem_best"].append(sem_best)
+
+                # These are optional and may be None when gt is not provided.
+                succ = metrics.get("success_at_final_step")
+                if succ in (True, False):
+                    agg_results[policy]["success"].append(1.0 if succ else 0.0)
+
+                sem_p1 = metrics.get("semantic_pass_at_1")
+                if sem_p1 in (True, False):
+                    agg_results[policy]["sem_pass_at_1"].append(1.0 if sem_p1 else 0.0)
             except Exception as e:
                 print(f"[Run] Failed {mesh_name} {policy} T{trial}: {e}", flush=True)
                 if "pyglet" in str(e) or "EGL" in str(e):
@@ -336,6 +361,77 @@ def main() -> None:
 
     print("\nAll trials complete.")
     print(f"Logs and Images saved under: {mesh_root}")
+
+    # --- Aggregate plots (similar to run_experiments) ---
+    def _avg_curves(series_list: list[list[float]]) -> list[float] | None:
+        if not series_list:
+            return None
+        min_len = min(len(s) for s in series_list if isinstance(s, list) and len(s) > 0)
+        if min_len <= 0:
+            return None
+        mat = np.asarray([s[:min_len] for s in series_list], dtype=np.float32)
+        return np.mean(mat, axis=0).tolist()
+
+    avg_vrr_map = {}
+    avg_vrr_best_map = {}
+    avg_sem_best_map = {}
+    success_map = {}
+    sem_pass1_map = {}
+
+    for pol, data in agg_results.items():
+        v = _avg_curves(data.get("vrr") or [])
+        if v is not None:
+            avg_vrr_map[pol] = v
+        vb = _avg_curves(data.get("vrr_best") or [])
+        if vb is not None:
+            avg_vrr_best_map[pol] = vb
+        sb = _avg_curves(data.get("sem_best") or [])
+        if sb is not None:
+            avg_sem_best_map[pol] = sb
+
+        succ = data.get("success") or []
+        if succ:
+            success_map[pol] = float(np.mean(np.asarray(succ, dtype=np.float32)))
+
+        sp1 = data.get("sem_pass_at_1") or []
+        if sp1:
+            sem_pass1_map[pol] = float(np.mean(np.asarray(sp1, dtype=np.float32)))
+
+    fig_dir = mesh_root / "figures"
+    fig_dir.mkdir(parents=True, exist_ok=True)
+    if avg_vrr_map:
+        plot_vrr_curves(avg_vrr_map, str(fig_dir / "comparison_vrr.png"))
+    if avg_vrr_best_map:
+        plot_vrr_curves(avg_vrr_best_map, str(fig_dir / "comparison_vrr_best_so_far.png"))
+    if success_map:
+        plot_success_rates(success_map, str(fig_dir / "comparison_success.png"))
+
+    # Semantic visibility is not VRR, but we can still plot it as a per-step curve.
+    if avg_sem_best_map:
+        plt.figure(figsize=(8, 6))
+        for pol, s in avg_sem_best_map.items():
+            plt.plot(range(len(s)), s, marker="o", label=pol, linewidth=2)
+        plt.title("Semantic visibility (best-so-far; higher is better)")
+        plt.xlabel("Step")
+        plt.ylabel("Semantic visibility (fraction of pixels)")
+        plt.grid(True, linestyle="--", alpha=0.6)
+        plt.legend()
+        plt.savefig(fig_dir / "comparison_semantic_visibility_best_so_far.png", bbox_inches="tight")
+        plt.close()
+
+    # Pass@1 proxy as a bar chart.
+    if sem_pass1_map:
+        plt.figure(figsize=(6, 4))
+        names = list(sem_pass1_map.keys())
+        vals = [sem_pass1_map[k] for k in names]
+        plt.bar(names, vals)
+        plt.ylim(0.0, 1.05)
+        plt.title("Semantic pass@1 rate (proxy)")
+        plt.ylabel("Rate")
+        plt.xticks(rotation=20)
+        plt.tight_layout()
+        plt.savefig(fig_dir / "comparison_semantic_pass_at_1.png", bbox_inches="tight")
+        plt.close()
 
     # Display final trajectory summary if available
     traj_img = (last_traj_dir / "fig_trajectory.png") if last_traj_dir else None

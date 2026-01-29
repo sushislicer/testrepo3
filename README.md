@@ -14,8 +14,8 @@ Simulation-only pipeline that leverages generative variance (Point-E) plus CLIPS
    # Ensure you use --system-site-packages if your base image has Torch/CUDA installed
    python3 -m venv .venv --system-site-packages
    source .venv/bin/activate
-   pip install -r requirements.txt
-   ```
+    pip install -r requirements.txt
+    ```
    *Note: If you are in China, you may need to manually download Point-E weights and CLIPSeg models due to network blocks. See "Troubleshooting" below.*
 
 3) **Run Distributed Experiment**:
@@ -30,6 +30,10 @@ Simulation-only pipeline that leverages generative variance (Point-E) plus CLIPS
 
 4) **Verify Results**:
     Results are archived in `results_export/`.
+
+### Optional: Objaverse subset download dependency
+
+If you plan to run [`download_objaverse_subset`](src/scripts/download_objaverse_subset.py:1), you need the `objaverse` Python package. It is included in [`requirements.txt`](requirements.txt), so installing requirements should be sufficient.
 
 5) **Aggregate results into tables (CSV)**:
    ```bash

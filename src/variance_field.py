@@ -120,16 +120,31 @@ def accumulate_semantic_weights(
     return np.stack(semantic_stack, axis=0)
 
 
-def combine_variance_and_semantics(variance: np.ndarray, semantic_stack: np.ndarray, cfg: VarianceConfig) -> np.ndarray:
-    """Combine geometric variance with semantic weights using primary and secondary signals."""
+def combine_variance_and_semantics(
+    variance: np.ndarray,
+    semantic_stack: np.ndarray,
+    cfg: VarianceConfig,
+    *,
+    return_components: bool = False,
+) -> np.ndarray | tuple[np.ndarray, dict]:
+    """Combine geometric variance with semantic weights using primary and secondary signals.
+
+    If `return_components=True`, returns `(scores, components)` where `components` includes
+    intermediate grids useful for debugging why handle/backside regions are not being
+    highlighted:
+    - `mean_semantic`: mean semantic weight per voxel
+    - `semantic_var_raw`: raw semantic variance per voxel (before gating/power)
+    - `s1`: primary signal (Var(Geometry) * gated Mean(Semantics))
+    - `s2`: secondary signal (gated Var(Semantics) after power)
+    """
     # S1: Var(Geometry) * Mean(Semantics)
     # semantic_stack is (N, V, V, V)
     if semantic_stack.shape[0] > 0:
         mean_semantic = semantic_stack.mean(axis=0)
-        s2 = np.var(semantic_stack, axis=0)
+        semantic_var_raw = np.var(semantic_stack, axis=0)
     else:
         mean_semantic = np.zeros_like(variance)
-        s2 = np.zeros_like(variance)
+        semantic_var_raw = np.zeros_like(variance)
 
     # Focus S1 on high-confidence semantic regions.
     # This helps prevent "square"/bounding-box artifacts from dominating when
@@ -155,7 +170,7 @@ def combine_variance_and_semantics(variance: np.ndarray, semantic_stack: np.ndar
     if abs(gamma2 - 1.0) > 1e-6:
         sem_s2 = np.power(np.clip(sem_s2, 0.0, 1.0), gamma2)
 
-    s2 = s2 * sem_s2
+    s2 = semantic_var_raw * sem_s2
     p2 = float(getattr(cfg, "semantic_s2_power", 1.0) or 1.0)
     # Power < 1 boosts small values (e.g., sqrt).
     if abs(p2 - 1.0) > 1e-6:
@@ -172,7 +187,16 @@ def combine_variance_and_semantics(variance: np.ndarray, semantic_stack: np.ndar
     else:
         scores = np.zeros_like(scores)
         
-    return scores
+    if return_components:
+        comps = {
+            "mean_semantic": np.asarray(mean_semantic, dtype=np.float32),
+            "semantic_var_raw": np.asarray(semantic_var_raw, dtype=np.float32),
+            "s1": np.asarray(s1, dtype=np.float32),
+            "s2": np.asarray(s2, dtype=np.float32),
+        }
+        return np.asarray(scores, dtype=np.float32), comps
+
+    return np.asarray(scores, dtype=np.float32)
 
 
 def extract_topk_centroid(score_grid: np.ndarray, grid: VoxelGrid, topk_ratio: float) -> Tuple[np.ndarray, np.ndarray]:
