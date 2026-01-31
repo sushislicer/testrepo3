@@ -136,8 +136,11 @@ def estimate_orbit_distance_for_cloud(
     if pts.size == 0:
         return float(np.mean(clamp))
 
-    mins = pts.min(axis=0)
-    maxs = pts.max(axis=0)
+    # Robust extents: raw min/max can be dominated by a handful of outliers
+    # (or sparse stray points) which makes the estimated camera radius too large
+    # and causes the object to appear "far away" in renders.
+    mins = np.quantile(pts, 0.01, axis=0)
+    maxs = np.quantile(pts, 0.99, axis=0)
     ext = maxs - mins
     obj_radius = 0.5 * float(np.max(ext))
     obj_radius = max(obj_radius, 1e-4)
@@ -220,9 +223,19 @@ def estimate_yaw_align_to_mask(
 
     best_yaw = 0.0
     best_score = -1.0
+
+    # Tie-breaking matters: for near-symmetric silhouettes (e.g., handle fully occluded),
+    # many yaws yield identical IoU. The previous implementation kept the *first*
+    # maximum (often -180deg), which can flip view-index mapping and degrade NBV.
+    # We instead prefer the yaw closest to the prior (or 0deg when no prior).
+    ref_yaw = float(prior_yaw_deg) if prior_yaw_deg is not None else 0.0
+    eps = 1e-9
     for yaw in coarse_yaws:
         score = _iou(_render_mask(float(yaw)), in_mask)
-        if score > best_score:
+        if (score > best_score + eps) or (
+            abs(score - best_score) <= eps
+            and abs(_angle_wrap_deg(float(yaw) - ref_yaw)) < abs(_angle_wrap_deg(float(best_yaw) - ref_yaw)) - 1e-9
+        ):
             best_score = score
             best_yaw = float(yaw)
 
@@ -231,7 +244,10 @@ def estimate_yaw_align_to_mask(
     fine_yaws = np.arange(best_yaw - float(coarse_step_deg), best_yaw + float(coarse_step_deg) + 1e-6, fine_step, dtype=np.float32)
     for yaw in fine_yaws:
         score = _iou(_render_mask(float(yaw)), in_mask)
-        if score > best_score:
+        if (score > best_score + eps) or (
+            abs(score - best_score) <= eps
+            and abs(_angle_wrap_deg(float(yaw) - ref_yaw)) < abs(_angle_wrap_deg(float(best_yaw) - ref_yaw)) - 1e-9
+        ):
             best_score = score
             best_yaw = float(yaw)
 

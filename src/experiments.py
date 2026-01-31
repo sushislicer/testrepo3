@@ -25,6 +25,7 @@ from .segmentation import (
     compute_point_mask_weights_multiview,
     render_point_cloud_view,
 )
+from .affordance_proxy import protrusion_strength, protrusion_weights
 from .simulator import VirtualTabletopSimulator, pose_to_matrix
 from .variance_field import (
     VoxelGrid,
@@ -246,8 +247,9 @@ class ActiveHallucinationRunner:
             # azimuths (0, 120, 240 deg by default), run CLIPSeg per render, then project masks
             # back to 3D points to obtain per-point semantic weights.
             point_weights = []
+            geom_strengths: List[float] = []
             for cloud_idx, pc in enumerate(clouds_aligned):
-                w = compute_point_mask_weights_multiview(
+                w_sem = compute_point_mask_weights_multiview(
                     pc,
                     base_cam_to_world,
                     cfg.simulator.intrinsics,
@@ -259,12 +261,36 @@ class ActiveHallucinationRunner:
                     point_radius_px=cfg.segmentation.render_point_radius_px,
                     blur_sigma=cfg.segmentation.render_blur_sigma,
                 )
-                point_weights.append(w)
+
+                # Geometry fallback: detect protrusions (handles) when semantic masks are weak.
+                w_sem = np.asarray(w_sem, dtype=np.float32)
+                sem_max = float(np.max(w_sem)) if w_sem.size > 0 else 0.0
+                w_geom, _c = protrusion_weights(
+                    pc,
+                    core_quantile=float(getattr(cfg.segmentation, "geometry_fallback_core_quantile", 0.85)),
+                    mad_k=float(getattr(cfg.segmentation, "geometry_fallback_mad_k", 3.5)),
+                )
+                g_strength = protrusion_strength(w_geom)
+                geom_strengths.append(float(g_strength))
+
+                use_geom = bool(getattr(cfg.segmentation, "geometry_fallback", True)) and (
+                    sem_max < float(getattr(cfg.segmentation, "geometry_fallback_sem_max_thr", 0.12))
+                )
+                if use_geom and w_geom.size == w_sem.size and w_sem.size > 0:
+                    alpha = float(getattr(cfg.segmentation, "geometry_fallback_weight", 0.35))
+                    w = np.maximum(w_sem, np.clip(alpha, 0.0, 1.0) * np.asarray(w_geom, dtype=np.float32))
+                else:
+                    w = w_sem
+
+                point_weights.append(np.asarray(w, dtype=np.float32))
 
             # Optional: pick the K most "handle-like" hypotheses when we oversample.
             if oversample > 1 and len(clouds_aligned) > desired_num_seeds:
                 strengths: List[float] = []
-                for w in point_weights:
+                sem_thr = float(getattr(cfg.segmentation, "geometry_pick_sem_thr", 0.06))
+                geom_w = float(getattr(cfg.segmentation, "geometry_pick_weight", 0.85))
+
+                for w, g in zip(point_weights, geom_strengths):
                     w = np.asarray(w, dtype=np.float32)
                     if w.size == 0:
                         strengths.append(0.0)
@@ -272,7 +298,10 @@ class ActiveHallucinationRunner:
                     s_mean = float(np.mean(w))
                     s_max = float(np.max(w))
                     # Favor existence of any strong handle signal, but keep a small mean term.
-                    strengths.append(0.7 * s_max + 0.3 * s_mean)
+                    s_sem = 0.7 * s_max + 0.3 * s_mean
+                    if s_sem < sem_thr:
+                        s_sem = max(s_sem, float(geom_w) * float(g))
+                    strengths.append(float(s_sem))
 
                 order = np.argsort(np.asarray(strengths, dtype=np.float32))[::-1]
                 keep = order[: int(desired_num_seeds)]
@@ -314,6 +343,12 @@ class ActiveHallucinationRunner:
                 }
             else:
                 score_grid = combine_variance_and_semantics(variance_grid, semantic_stack, cfg.variance)
+
+            # Degeneracy guard: if score field is near-constant, the top-k centroid is
+            # effectively arbitrary and can send NBV to weird side views.
+            smin = float(np.min(score_grid))
+            smax = float(np.max(score_grid))
+            degenerate_score = (smax - smin) < 1e-6 or smax < 1e-6
             centroid, _ = extract_topk_centroid(score_grid, grid, cfg.variance.topk_ratio)
             # For *_combined variants, we will also keep the full top-k score set so
             # NBV can aim at a distribution of high-score voxels, not only a centroid.
@@ -359,7 +394,10 @@ class ActiveHallucinationRunner:
                 # via S1 + semantic_variance_weight * S2. A centroid-only target can lose
                 # semantic focus on ring-like score distributions, so when semantic_variance_weight
                 # is enabled we score views against the *distribution* of top-k score voxels.
-                if float(getattr(cfg.variance, "semantic_variance_weight", 0.0) or 0.0) > 1e-9:
+                if degenerate_score:
+                    next_view = select_next_view_geometric(current, poses_cloud, visited)
+                    policy_score = 0.0
+                elif float(getattr(cfg.variance, "semantic_variance_weight", 0.0) or 0.0) > 1e-9:
                     next_view, policy_score = select_next_view_active_weighted(
                         current, poses_cloud, score_points, visited, cfg.policy
                     )

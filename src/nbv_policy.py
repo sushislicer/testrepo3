@@ -75,7 +75,14 @@ def select_next_view_active(
         p_hat = _view_position_dir(pose)
         face = float(np.dot(p_hat, c_hat))
         face = float(np.clip(face, 0.0, 1.0))
-        score = face ** float(cfg.alignment_pow)
+        base = face ** float(cfg.alignment_pow)
+
+        # Prefer larger viewpoint changes (softly) to avoid tiny azimuth increments.
+        div_w = float(getattr(cfg, "diversity_weight", 0.0) or 0.0)
+        div_p = float(getattr(cfg, "diversity_pow", 1.0) or 1.0)
+        move = float(np.clip(angle_move / 180.0, 0.0, 1.0))
+        move = move ** max(div_p, 1e-6)
+        score = base * (1.0 + div_w * move)
         scores.append((score, i))
     if not scores:
         # fallback to any unvisited view
@@ -163,7 +170,13 @@ def select_next_view_active_weighted(
             xyz_hat[valid] = xyz[valid] / r[valid, None]
             face = np.sum(xyz_hat * p_hat[None, :], axis=1)
             face = np.clip(face, 0.0, 1.0)
-            score = float(np.sum(w * (face ** pow_)))
+            base = float(np.sum(w * (face ** pow_)))
+
+            div_w = float(getattr(cfg, "diversity_weight", 0.0) or 0.0)
+            div_p = float(getattr(cfg, "diversity_pow", 1.0) or 1.0)
+            move = float(np.clip(angle_move / 180.0, 0.0, 1.0))
+            move = move ** max(div_p, 1e-6)
+            score = base * (1.0 + div_w * move)
         scores.append((score, i))
 
     if not scores:

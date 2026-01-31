@@ -118,12 +118,31 @@ class SegmentationConfig:
     render_point_radius_px: int = 2
     render_blur_sigma: float = 0.8
 
+    # Geometry-only fallback for semantic painting.
+    # If CLIPSeg produces near-zero masks on point-cloud renders, we can still
+    # obtain a weak affordance signal by detecting radial protrusions (mug handles).
+    geometry_fallback: bool = True
+    geometry_fallback_weight: float = 0.35  # scales protrusion weights before max-merge
+    geometry_fallback_sem_max_thr: float = 0.12  # enable fallback if max semantic weight < thr
+    geometry_fallback_core_quantile: float = 0.85
+    geometry_fallback_mad_k: float = 3.5
+
+    # Oversample seed selection fallback.
+    geometry_pick_weight: float = 0.85  # scales protrusion-strength when semantic is weak
+    geometry_pick_sem_thr: float = 0.06  # if semantic-strength < thr, allow geometry to dominate
+
 
 @dataclass
 class PolicyConfig:
     alignment_pow: float = 1.5
     min_angle_deg: float = 5.0
     random_seed: int = 42
+
+    # Encourage larger viewpoint changes (helps avoid getting stuck on near-identical
+    # side views when the target direction is ambiguous).
+    # Score multiplier: base_score * (1 + diversity_weight * (angle/180)^diversity_pow)
+    diversity_weight: float = 0.45
+    diversity_pow: float = 0.8
 
 
 @dataclass
