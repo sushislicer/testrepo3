@@ -18,6 +18,18 @@ def _view_direction(pose: Pose) -> np.ndarray:
     return vec / norm
 
 
+def _view_position_dir(pose: Pose) -> np.ndarray:
+    """Unit vector from object center (origin) to camera position.
+
+    Our orbital poses always look at (approximately) the object center.
+    For NBV on a centered object, the most discriminative quantity is often the
+    *camera position direction* (which side of the object we are on), not the
+    optical axis alignment to a near-center target.
+    """
+    p = np.asarray(pose.position, dtype=np.float32)
+    return p / (np.linalg.norm(p) + 1e-8)
+
+
 def select_next_view_active(
     current_idx: int,
     poses: List[Pose],
@@ -25,26 +37,45 @@ def select_next_view_active(
     visited: Set[int],
     cfg: PolicyConfig,
 ) -> Tuple[int, float]:
-    """Select view whose optical axis best aligns with the target centroid."""
+    """Select view that best *faces* the target centroid.
+
+    NOTE:
+    The camera poses in this project are orbital and look at the object center.
+    If a target lies near the center (common when score-fields form rings/shells),
+    optical-axis alignment `dot(view_dir, to_target_dir)` becomes ~1 for *all* views
+    and the policy degenerates.
+
+    Instead, we score a candidate view by how well its **camera position direction**
+    aligns with the target direction from the object center.
+    """
     scores = []
+
+    cur_dir = _view_direction(poses[current_idx])
+
+    c = np.asarray(target_centroid, dtype=np.float32).reshape(3)
+    c_norm = float(np.linalg.norm(c))
+    if c_norm < 1e-6:
+        # Degenerate: target near center. Fall back to geometric diversity.
+        next_view = select_next_view_geometric(current_idx, poses, visited)
+        return int(next_view), 0.0
+    c_hat = c / (c_norm + 1e-8)
+
     for i, pose in enumerate(poses):
         if i in visited:
             continue
+
+        # Enforce movement diversity relative to current view.
         direction = _view_direction(pose)
-        to_target = target_centroid - pose.position
-        if np.linalg.norm(to_target) < 1e-6:
-            align = 1.0
-        else:
-            align = np.dot(direction, to_target / (np.linalg.norm(to_target) + 1e-8))
-        align = max(align, -1.0)
-        angle = math.degrees(math.acos(max(min(align, 1.0), -1.0)))
-        if angle < cfg.min_angle_deg:
+        align_move = float(np.clip(np.dot(cur_dir, direction), -1.0, 1.0))
+        angle_move = math.degrees(math.acos(align_move))
+        if float(getattr(cfg, "min_angle_deg", 0.0) or 0.0) > 0.0 and angle_move < float(cfg.min_angle_deg):
             continue
-        # Use only non-negative alignment for scoring so that raising to a
-        # fractional power never produces complex values when the target lies
-        # behind the camera.
-        align_for_score = max(align, 0.0)
-        score = align_for_score ** cfg.alignment_pow
+
+        # Facing score: does the camera sit on the same side as the target?
+        p_hat = _view_position_dir(pose)
+        face = float(np.dot(p_hat, c_hat))
+        face = float(np.clip(face, 0.0, 1.0))
+        score = face ** float(cfg.alignment_pow)
         scores.append((score, i))
     if not scores:
         # fallback to any unvisited view
@@ -90,33 +121,49 @@ def select_next_view_active_weighted(
         w_sum = float(w.sum())
     w = w / w_sum
 
-    # Use a weighted centroid only for the optional min-angle gating.
+    # Use the *direction* of the weighted centroid as a coarse facing reference.
     weighted_centroid = (xyz * w[:, None]).sum(axis=0)
+    c_norm = float(np.linalg.norm(weighted_centroid))
+    c_hat = weighted_centroid / (c_norm + 1e-8) if c_norm > 1e-6 else None
 
     scores: List[Tuple[float, int]] = []
     pow_ = float(cfg.alignment_pow)
     min_angle = float(getattr(cfg, "min_angle_deg", 0.0) or 0.0)
 
+    cur_dir = _view_direction(poses[current_idx])
+
     for i, pose in enumerate(poses):
         if i in visited:
             continue
 
+        # Enforce movement diversity relative to current view.
         direction = _view_direction(pose)
-        to_centroid = weighted_centroid - pose.position
-        if np.linalg.norm(to_centroid) > 1e-6:
-            align_c = float(np.dot(direction, to_centroid / (np.linalg.norm(to_centroid) + 1e-8)))
-            align_c = float(np.clip(align_c, -1.0, 1.0))
-            angle_c = math.degrees(math.acos(align_c))
-            if min_angle > 0.0 and angle_c < min_angle:
-                continue
+        align_move = float(np.clip(np.dot(cur_dir, direction), -1.0, 1.0))
+        angle_move = math.degrees(math.acos(align_move))
+        if min_angle > 0.0 and angle_move < min_angle:
+            continue
 
-        # Score: expected alignment toward score-weighted targets.
-        to = xyz - pose.position[None, :]
-        d = np.linalg.norm(to, axis=1) + 1e-8
-        to_n = to / d[:, None]
-        align = np.sum(to_n * direction[None, :], axis=1)
-        align = np.clip(align, 0.0, 1.0)
-        score = float(np.sum(w * (align ** pow_)))
+        # Facing score: expected visibility of score-weighted targets.
+        # A surface voxel at xyz is most visible when the camera position points
+        # toward xyz (same-side hemisphere). Using camera *position direction*
+        # avoids the "all views look at origin" degeneracy.
+        p_hat = _view_position_dir(pose)
+
+        r = np.linalg.norm(xyz, axis=1)
+        valid = r > 1e-6
+        if not np.any(valid):
+            # No meaningful spatial direction; fall back to centroid direction if available.
+            if c_hat is None:
+                continue
+            face = float(np.dot(p_hat, c_hat))
+            face = float(np.clip(face, 0.0, 1.0))
+            score = face ** pow_
+        else:
+            xyz_hat = np.zeros_like(xyz)
+            xyz_hat[valid] = xyz[valid] / r[valid, None]
+            face = np.sum(xyz_hat * p_hat[None, :], axis=1)
+            face = np.clip(face, 0.0, 1.0)
+            score = float(np.sum(w * (face ** pow_)))
         scores.append((score, i))
 
     if not scores:

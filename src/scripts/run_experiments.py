@@ -197,6 +197,16 @@ def parse_args() -> argparse.Namespace:
         help="semantic_variance_weight used for *_combined policies.",
     )
     parser.add_argument(
+        "--combined_hallucination_oversample",
+        type=int,
+        default=3,
+        help=(
+            "When running *_combined policies, oversample Point-E hypotheses by this factor "
+            "and keep the most affordance-like seeds (semantic-painted). "
+            "Example: num_seeds=5, oversample=3 -> generate 15, keep best 5."
+        ),
+    )
+    parser.add_argument(
         "--semantic_threshold",
         type=float,
         default=None,
@@ -584,6 +594,9 @@ def main() -> None:
                     actual_policy = policy.replace("_combined", "")
                     # Enable combined score (S1 + S2) with a fixed weight for consistency.
                     cfg.variance.semantic_variance_weight = float(args.combined_semantic_variance_weight)
+                    # Strengthen "hallucination" by oversampling and selecting the most
+                    # affordance-like Point-E hypotheses.
+                    cfg.pointe.hallucination_oversample = int(max(1, args.combined_hallucination_oversample))
                 
                 cfg.experiment.policy = actual_policy
                 
