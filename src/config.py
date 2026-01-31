@@ -61,6 +61,16 @@ class PointEConfig:
     alignment_surface_grid: int = 96  # resolution for front-surface extraction
     alignment_max_points: int = 2048  # downsample for speed
 
+    # Active-hallucination support.
+    # When the affordance is occluded, Point-E may generate some hypotheses without a
+    # handle even if the prompt says it exists. One lightweight way to strengthen the
+    # "hallucination" set is to oversample more Point-E seeds, then keep the K seeds
+    # whose clouds contain the strongest semantic evidence for the affordance (as
+    # measured by semantic painting on the cloud renders).
+    #
+    # Setting >1 increases compute roughly linearly.
+    hallucination_oversample: int = 1
+
 
 @dataclass
 class VarianceConfig:

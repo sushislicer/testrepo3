@@ -174,8 +174,33 @@ class ActiveHallucinationRunner:
             rgb_sem_mask = self.segmenter.segment_affordance(rgb, cfg.segmentation.prompt)
             sem_vis = float(np.mean(rgb_sem_mask > float(cfg.segmentation.threshold)))
 
+            # --- Point-E sampling ---
+            # Active hallucination note:
+            # Even with a prompt like "a mug with a handle", Point-E can sometimes
+            # produce hypotheses without a clear handle when the conditioning view
+            # is handle-occluded. To strengthen the hypothesis set, we optionally
+            # oversample more seeds and later keep the K seeds with the strongest
+            # semantic evidence for the affordance (measured via semantic painting
+            # on the cloud renders).
+            desired_num_seeds = int(cfg.pointe.num_seeds)
+            oversample = int(getattr(cfg.pointe, "hallucination_oversample", 1) or 1)
+            oversample = max(1, oversample)
+            num_gen = int(max(1, desired_num_seeds * oversample))
+
+            seed_list_gen = cfg.pointe.seed_list
+            if seed_list_gen is not None:
+                seed_list_gen = [int(s) for s in list(seed_list_gen)]
+                if len(seed_list_gen) < num_gen:
+                    base = int(max(seed_list_gen)) + 1 if seed_list_gen else 0
+                    seed_list_gen = seed_list_gen + [base + i for i in range(num_gen - len(seed_list_gen))]
+                else:
+                    seed_list_gen = seed_list_gen[:num_gen]
+
             clouds = self.pointe.generate_point_clouds_from_image(
-                rgb, prompt=cfg.pointe.prompt, num_seeds=cfg.pointe.num_seeds, seed_list=cfg.pointe.seed_list
+                rgb,
+                prompt=cfg.pointe.prompt,
+                num_seeds=num_gen,
+                seed_list=seed_list_gen,
             )
             cloud_points = [int(pc.shape[0]) for pc in clouds]
 
@@ -221,8 +246,6 @@ class ActiveHallucinationRunner:
             # azimuths (0, 120, 240 deg by default), run CLIPSeg per render, then project masks
             # back to 3D points to obtain per-point semantic weights.
             point_weights = []
-            semantic_render0 = None
-            semantic_mask0 = None
             for cloud_idx, pc in enumerate(clouds_aligned):
                 w = compute_point_mask_weights_multiview(
                     pc,
@@ -238,16 +261,41 @@ class ActiveHallucinationRunner:
                 )
                 point_weights.append(w)
 
-                # Save one representative semantic render/mask for debugging (cloud 0, view 0).
-                if cfg.experiment.save_debug and cloud_idx == 0:
-                    semantic_render0 = render_point_cloud_view(
-                        pc,
-                        base_cam_to_world,
-                        cfg.simulator.intrinsics,
-                        point_radius_px=cfg.segmentation.render_point_radius_px,
-                        blur_sigma=cfg.segmentation.render_blur_sigma,
-                    )
-                    semantic_mask0 = self.segmenter.segment_affordance(semantic_render0, cfg.segmentation.prompt)
+            # Optional: pick the K most "handle-like" hypotheses when we oversample.
+            if oversample > 1 and len(clouds_aligned) > desired_num_seeds:
+                strengths: List[float] = []
+                for w in point_weights:
+                    w = np.asarray(w, dtype=np.float32)
+                    if w.size == 0:
+                        strengths.append(0.0)
+                        continue
+                    s_mean = float(np.mean(w))
+                    s_max = float(np.max(w))
+                    # Favor existence of any strong handle signal, but keep a small mean term.
+                    strengths.append(0.7 * s_max + 0.3 * s_mean)
+
+                order = np.argsort(np.asarray(strengths, dtype=np.float32))[::-1]
+                keep = order[: int(desired_num_seeds)]
+                keep = [int(i) for i in keep.tolist()]
+
+                clouds_aligned = [clouds_aligned[i] for i in keep]
+                point_weights = [point_weights[i] for i in keep]
+                cloud_points = [int(clouds[i].shape[0]) for i in keep]
+
+            # Save one representative semantic render/mask for debugging.
+            # After the oversample-selection above, cloud 0 should be the strongest
+            # handle hypothesis (if any exist).
+            semantic_render0 = None
+            semantic_mask0 = None
+            if cfg.experiment.save_debug and len(clouds_aligned) > 0:
+                semantic_render0 = render_point_cloud_view(
+                    clouds_aligned[0],
+                    base_cam_to_world,
+                    cfg.simulator.intrinsics,
+                    point_radius_px=cfg.segmentation.render_point_radius_px,
+                    blur_sigma=cfg.segmentation.render_blur_sigma,
+                )
+                semantic_mask0 = self.segmenter.segment_affordance(semantic_render0, cfg.segmentation.prompt)
 
             variance_grid = compute_variance_field(clouds_aligned, cfg.variance)
             semantic_stack = accumulate_semantic_weights(clouds_aligned, point_weights, cfg.variance)

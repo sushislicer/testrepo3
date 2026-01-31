@@ -2,6 +2,23 @@
 
 from __future__ import annotations
 
+import os
+# Headless rendering on remote VMs/servers:
+#
+# IMPORTANT:
+# We *force* these variables (not setdefault) because users may have
+# `PYOPENGL_PLATFORM=glx` or similar in their shell environment. In that case,
+# `setdefault` would keep the incompatible value and pyglet may fail with:
+#   "Cannot connect to 'None'".
+#
+# Set these BEFORE importing pyrender / OpenGL (which happens inside
+# [`VirtualTabletopSimulator`](src/simulator.py:96)).
+os.environ["PYOPENGL_PLATFORM"] = "egl"
+os.environ["EGL_PLATFORM"] = "surfaceless"
+# In some environments pyglet still tries to open an X display; enabling headless
+# mode avoids that (supported by pyglet 1.5+).
+os.environ["PYGLET_HEADLESS"] = "1"
+
 import argparse
 import sys
 import math
