@@ -35,9 +35,15 @@ class SimulatorConfig:
 
     # Mesh normalization.
     # Real-world assets (e.g., Objaverse) often have inconsistent up-axes and can
-    # appear sideways. When enabled, we attempt a best-effort stable-pose upright
-    # transform before centering and placing the base on z=0.
-    normalize_stable_pose: bool = True
+    # appear sideways. Trimesh's stable-pose normalization can help for those.
+    #
+    # However, for curated assets that are already oriented correctly (e.g., our
+    # shipped mugs), stable-pose selection can choose a *side-lying* placement.
+    #
+    # Default policy:
+    # - OFF by default (keeps curated assets upright)
+    # - scripts enable it for Objaverse meshes when running those datasets.
+    normalize_stable_pose: bool = False
 
 
 @dataclass
