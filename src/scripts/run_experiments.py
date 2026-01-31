@@ -227,6 +227,17 @@ def _stable_hash32(text: str) -> int:
     return int(zlib.adler32(text.encode("utf-8")) & 0xFFFFFFFF)
 
 
+def _is_objaverse_mesh(mesh_path: str) -> bool:
+    """Heuristic: treat Objaverse assets as needing stable-pose normalization.
+
+    Curated meshes (e.g., our shipped mug assets) are often already upright.
+    Trimesh's stable-pose selection can lay these on their side, which makes
+    the rendered mug look sideways even though the orbital camera is correct.
+    """
+    p = str(mesh_path).replace("\\", "/").lower()
+    return ("/objaverse/" in p) or ("/objaverse_subset/" in p)
+
+
 def _choose_initial_view(
     *,
     mode: str,
@@ -276,6 +287,7 @@ def _compute_semantic_occlusion_pool(
     segmenter: CLIPSegSegmenter,
     prompt: str,
     quantile: float,
+    normalize_stable_pose: bool | None = None,
 ) -> list[int]:
     """Return a list of view indices where the semantic region is least visible.
 
@@ -285,6 +297,8 @@ def _compute_semantic_occlusion_pool(
     q = float(np.clip(quantile, 0.0, 1.0))
     cfg = ActiveHallucinationConfig.from_dict(base_cfg.to_dict())
     cfg.simulator.mesh_path = mesh_path
+    if normalize_stable_pose is not None:
+        cfg.simulator.normalize_stable_pose = bool(normalize_stable_pose)
     sim = VirtualTabletopSimulator(cfg.simulator)
     try:
         scores: list[float] = []
@@ -395,17 +409,15 @@ def main() -> None:
     args = parse_args()
     base_cfg = ActiveHallucinationConfig.from_yaml(args.config) if args.config else ActiveHallucinationConfig()
 
-    # Decide stable-pose normalization behavior.
-    # - mugs5: shipped assets are already oriented; stable-pose sometimes lays mugs sideways.
-    # - others: keep the default (usually True) unless overridden.
-    if str(args.normalize_stable_pose) == "on":
+    # Stable-pose normalization mode.
+    # NOTE: We apply the final decision per-mesh (later), because in "auto" mode
+    # curated mug meshes should stay upright, while Objaverse assets often need
+    # reorientation.
+    normalize_mode = str(args.normalize_stable_pose)
+    if normalize_mode == "on":
         base_cfg.simulator.normalize_stable_pose = True
-    elif str(args.normalize_stable_pose) == "off":
+    elif normalize_mode == "off":
         base_cfg.simulator.normalize_stable_pose = False
-    else:
-        # auto
-        if str(args.preset or "").strip().lower() == "mugs5":
-            base_cfg.simulator.normalize_stable_pose = False
 
     # Create a fresh run subdirectory by default to avoid overwriting previous results.
     # This makes it easier to compare different hyperparameter sweeps.
@@ -451,6 +463,14 @@ def main() -> None:
         mesh_name = Path(mesh_path).stem
         print(f"\n[Mesh] {mesh_name}: {mesh_path}", flush=True)
 
+        # Decide stable-pose normalization for this mesh.
+        # - Curated assets: keep original upright orientation (disable stable-pose).
+        # - Objaverse assets: enable stable-pose for robustness.
+        if normalize_mode == "auto":
+            normalize_stable_pose_mesh = _is_objaverse_mesh(mesh_path)
+        else:
+            normalize_stable_pose_mesh = bool(getattr(base_cfg.simulator, "normalize_stable_pose", True))
+
         mesh_seed = int(base_cfg.policy.random_seed) + int(args.initial_view_seed) + _stable_hash32(mesh_name)
 
         # Optional semantic-occlusion pool (computed once per mesh).
@@ -463,6 +483,7 @@ def main() -> None:
                 segmenter=shared_segmenter,
                 prompt=str(occl_prompt),
                 quantile=float(args.initial_view_occlusion_quantile),
+                normalize_stable_pose=normalize_stable_pose_mesh,
             )
             if view_pool:
                 print(f"[InitView] semantic_occluded pool size={len(view_pool)}/{int(base_cfg.simulator.num_views)} prompt='{occl_prompt}'", flush=True)
@@ -484,6 +505,8 @@ def main() -> None:
                 )
                 cfg = ActiveHallucinationConfig.from_dict(base_cfg.to_dict())
                 cfg.simulator.mesh_path = mesh_path
+                # Apply per-mesh stable-pose decision.
+                cfg.simulator.normalize_stable_pose = bool(normalize_stable_pose_mesh)
 
                 # Optional hyperparameter overrides.
                 if args.semantic_threshold is not None:

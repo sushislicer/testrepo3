@@ -42,6 +42,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mesh", type=str, required=True, help="Filename in assets or full path.")
     parser.add_argument("--config", type=str, default=None, help="Path to YAML config.")
 
+    # Mesh pose normalization.
+    # Some real-world assets (e.g., Objaverse) come in arbitrary coordinate frames,
+    # so stable-pose upright normalization can help. However, many curated mug assets
+    # are already oriented correctly and trimesh's stable-pose selection can choose
+    # a sideways placement (cup lying on its side), which is undesirable for demos.
+    parser.add_argument(
+        "--normalize_stable_pose",
+        type=str,
+        default="auto",
+        choices=["auto", "on", "off"],
+        help=(
+            "Control simulator stable-pose normalization. "
+            "auto: enable for Objaverse assets, disable otherwise. "
+            "on/off: force enable/disable."
+        ),
+    )
+
     # run_experiments-like batching.
     parser.add_argument(
         "--policies",
@@ -233,6 +250,20 @@ def main() -> None:
 
     base_cfg = ActiveHallucinationConfig.from_yaml(args.config) if args.config else ActiveHallucinationConfig()
     base_cfg.simulator.mesh_path = mesh_path
+
+    # Decide stable-pose normalization behavior (match run_experiments intent).
+    # Rationale: trimesh stable-poses can lay mugs sideways, which breaks the
+    # expectation that orbital camera views are upright.
+    if str(args.normalize_stable_pose) == "on":
+        base_cfg.simulator.normalize_stable_pose = True
+    elif str(args.normalize_stable_pose) == "off":
+        base_cfg.simulator.normalize_stable_pose = False
+    else:
+        # auto
+        p = str(mesh_path).replace("\\", "/")
+        is_objaverse = ("/objaverse/" in p) or ("/objaverse_subset/" in p)
+        base_cfg.simulator.normalize_stable_pose = bool(is_objaverse)
+
     base_cfg.experiment.save_debug = True
     if args.steps:
         base_cfg.experiment.num_steps = int(args.steps)

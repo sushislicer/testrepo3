@@ -137,13 +137,24 @@ def combine_variance_and_semantics(
     - `s1`: primary signal (Var(Geometry) * gated Mean(Semantics))
     - `s2`: secondary signal (gated Var(Semantics) after power)
     """
-    # S1: Var(Geometry) * Mean(Semantics)
     # semantic_stack is (N, V, V, V)
+    #
+    # Design note (Active Hallucination):
+    # - `mean_semantic` captures *consensus* about where the affordance is.
+    # - `semantic_var_raw` captures *disagreement* across hallucinated hypotheses.
+    #
+    # For the secondary (disagreement) signal, gating by the mean can accidentally
+    # erase the "one-of-K" case we care about (e.g., only 1 seed hallucinates the
+    # handle at voxel v => mean is small but uncertainty is real). To better match
+    # the intended behavior, we gate S2 by `max_semantic` ("any hypothesis thinks
+    # this voxel is affordance-like") rather than the mean.
     if semantic_stack.shape[0] > 0:
         mean_semantic = semantic_stack.mean(axis=0)
+        max_semantic = semantic_stack.max(axis=0)
         semantic_var_raw = np.var(semantic_stack, axis=0)
     else:
         mean_semantic = np.zeros_like(variance)
+        max_semantic = np.zeros_like(variance)
         semantic_var_raw = np.zeros_like(variance)
 
     # Focus S1 on high-confidence semantic regions.
@@ -162,7 +173,8 @@ def combine_variance_and_semantics(
     # Secondary signal: semantic disagreement across seeds.
     # Use a *softer* semantic gate than S1 so we don't erase disagreements when
     # only a subset of seeds predict the affordance (low mean, high variance).
-    sem_s2 = mean_semantic
+    # IMPORTANT: gate by max_semantic ("exists in any hypothesis"), not mean.
+    sem_s2 = max_semantic
     thr2 = float(getattr(cfg, "semantic_s2_threshold", 0.0) or 0.0)
     if thr2 > 0.0:
         sem_s2 = np.clip((sem_s2 - thr2) / max(1.0 - thr2, 1e-6), 0.0, 1.0)
@@ -190,6 +202,7 @@ def combine_variance_and_semantics(
     if return_components:
         comps = {
             "mean_semantic": np.asarray(mean_semantic, dtype=np.float32),
+            "max_semantic": np.asarray(max_semantic, dtype=np.float32),
             "semantic_var_raw": np.asarray(semantic_var_raw, dtype=np.float32),
             "s1": np.asarray(s1, dtype=np.float32),
             "s2": np.asarray(s2, dtype=np.float32),
