@@ -137,12 +137,15 @@ def parse_args() -> argparse.Namespace:
         "--initial_view_mode",
         type=str,
         default="random_per_trial",
-        choices=["fixed", "random_per_trial", "sweep", "semantic_occluded"],
+        choices=["fixed", "random_per_trial", "sweep", "mesh_sweep", "mesh_list", "semantic_occluded"],
         help=(
             "How to choose the initial camera view for each (mesh,policy,trial). "
             "fixed: always use --initial_view. "
             "random_per_trial: deterministically sample a different start view per trial using the base random_seed. "
             "sweep: evenly-space initial views across the orbit (e.g., trials=3 -> 0, 8, 16 when num_views=24). "
+            "mesh_sweep: evenly-space initial views across meshes (e.g., 5 meshes -> 0, 4, 9, 14, 19 when num_views=24), "
+            "useful for running --preset mugs5 with trials=1 and guaranteeing different start views per mug. "
+            "mesh_list: use the per-mesh initial view indices provided via --initial_view_list (comma-separated). "
             "semantic_occluded: pick an initial view from the lowest-visibility semantic views (requires rendering all orbital views once per mesh)."
         ),
     )
@@ -151,6 +154,15 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=0,
         help="Initial view index used when --initial_view_mode=fixed.",
+    )
+    parser.add_argument(
+        "--initial_view_list",
+        type=str,
+        default=None,
+        help=(
+            "Comma-separated list of initial view indices, one per mesh in resolved order. "
+            "Used when --initial_view_mode=mesh_list. Example for 5 meshes: '12,6,7,17,14'."
+        ),
     )
     parser.add_argument(
         "--initial_view_seed",
@@ -247,6 +259,9 @@ def _choose_initial_view(
     num_views: int,
     seed: int,
     view_pool: list[int] | None = None,
+    mesh_idx: int | None = None,
+    meshes_total: int | None = None,
+    mesh_view_list: list[int] | None = None,
 ) -> int:
     """Deterministically choose an initial view.
 
@@ -262,6 +277,25 @@ def _choose_initial_view(
         pool = list(range(num_views))
     if mode == "fixed":
         return int(fixed_view) % num_views
+    if mode == "mesh_list":
+        views = mesh_view_list or []
+        if not views:
+            # Fall back to fixed if list not provided.
+            return int(fixed_view) % num_views
+        m = int(mesh_idx or 0)
+        return int(views[m % len(views)]) % num_views
+    if mode == "mesh_sweep":
+        # Evenly-space initial views across meshes (not across trials).
+        # This is useful when trials=1 and you want each mesh to start from a
+        # different view index.
+        m = int(mesh_idx or 0)
+        M = int(meshes_total or 0)
+        M = M if M > 0 else 1
+        # If M > num_views, wrapping is unavoidable.
+        base = int(np.floor(m * (num_views / float(M))))
+        base = int(base) % num_views
+        # Allow a user-specified global offset via --initial_view.
+        return int(base + int(fixed_view)) % num_views
     if mode == "sweep":
         # Evenly-space initial views across the orbit.
         # Example: num_views=24, trials_total=3 -> [0, 8, 16] instead of [0, 1, 2].
@@ -434,6 +468,16 @@ def main() -> None:
         meshes = resolve_meshes(args.mesh_glob)
     
     policies = _parse_policies(args.policies)
+
+    # Optional explicit per-mesh initial view list.
+    mesh_view_list: list[int] | None = None
+    if args.initial_view_list:
+        raw = str(args.initial_view_list)
+        toks = [t.strip() for t in raw.split(",") if t.strip()]
+        try:
+            mesh_view_list = [int(t) for t in toks]
+        except Exception:
+            raise ValueError(f"Could not parse --initial_view_list='{raw}' (expected comma-separated ints)")
     
     if not meshes:
         if args.mesh_list:
@@ -459,7 +503,9 @@ def main() -> None:
     shared_pointe = PointEGenerator(base_cfg.pointe)
     shared_segmenter = CLIPSegSegmenter(base_cfg.segmentation)
 
-    for mesh_path in meshes:
+    meshes_total = int(len(meshes))
+
+    for mesh_idx, mesh_path in enumerate(meshes):
         mesh_name = Path(mesh_path).stem
         print(f"\n[Mesh] {mesh_name}: {mesh_path}", flush=True)
 
@@ -498,6 +544,9 @@ def main() -> None:
                     num_views=int(base_cfg.simulator.num_views),
                     seed=int(mesh_seed),
                     view_pool=view_pool,
+                    mesh_idx=int(mesh_idx),
+                    meshes_total=int(meshes_total),
+                    mesh_view_list=mesh_view_list,
                 )
                 print(
                     f"[Run] Starting {mesh_name} | {policy} | T{trial} | init_view={initial_view}",
